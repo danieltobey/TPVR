@@ -572,6 +572,9 @@ struct UserSettings {
         // animated ones (dusk::interp::material::has_recorded_light_view()).
         // Default on; off trades lighting accuracy for CPU time.
         ConfigVar<bool> vrAccurateObjectLighting;
+        // While riding Epona, rotate the view by the horse's own turning so
+        // the look direction relative to the horse is kept (vr_main.cpp).
+        ConfigVar<bool> vrHorseTurnView;
 
         // Audio
         ConfigVar<bool> noLowHpSound;

@@ -1052,6 +1052,13 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             });
 
         leftPane.add_section("Turning");
+        config_bool_select(leftPane, rightPane, getSettings().game.vrHorseTurnView,
+            {
+                .key = "Turn View With Horse",
+                .helpText = "While riding, your view turns along with Epona, so wherever you're "
+                            "looking relative to the horse stays the same as she turns. Steering "
+                            "stays relative to where you look. On by default."
+            });
         config_bool_select(leftPane, rightPane, getSettings().game.vrCutsceneFaceCamera,
             {
                 .key = "Face Cutscene Camera",

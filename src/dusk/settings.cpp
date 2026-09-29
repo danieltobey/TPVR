@@ -170,6 +170,7 @@ UserSettings g_userSettings = {
         .vrSunGlareDimming {"game.vrSunGlareDimming", false},
         .vrCutsceneFaceCamera {"game.vrCutsceneFaceCamera", true},
         .vrAccurateObjectLighting {"game.vrAccurateObjectLighting", true},
+        .vrHorseTurnView {"game.vrHorseTurnView", true},
 
         // Audio
         .noLowHpSound {"game.noLowHpSound", false},
@@ -449,6 +450,7 @@ void registerSettings() {
     Register(g_userSettings.game.vrSunGlareDimming);
     Register(g_userSettings.game.vrCutsceneFaceCamera);
     Register(g_userSettings.game.vrAccurateObjectLighting);
+    Register(g_userSettings.game.vrHorseTurnView);
     Register(g_userSettings.game.enableFastIronBoots);
     Register(g_userSettings.game.canTransformAnywhere);
     Register(g_userSettings.game.fastRoll);

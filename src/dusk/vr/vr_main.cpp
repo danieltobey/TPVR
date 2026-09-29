@@ -49,6 +49,8 @@
 #include "dusk/vr/vr_xr_submit.hpp"             // dusk::vr::Session
 #include "dusk/vr/vr_menu_gamepad.hpp"          // dusk::vr::ensureVrMenuGamepadAttached, etc.
 #include "dusk/vr/vr_main.hpp"
+#include "d/actor/d_a_horse.h"                // daHorse_c -- horse turn follow
+#include "dusk/interp/frame_interpolation.h"   // sim_tick_seq/get_interpolation_step
 
 // TEMP DIAGNOSTIC (VR black-screen-after-save investigation): plain,
 // unmangled, non-namespaced global mirroring g_renderedToHeadsetThisFrame
@@ -2171,6 +2173,57 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         } else {
             dusk::vr::updateSmoothTurn(turnStickX, pacing.dt,
                 static_cast<float>(turnSettings.vrSmoothTurnSpeed.getValue()));
+        }
+    }
+
+    // --- Horse riding: turn the view with Epona (2026-09-29,
+    // game.vrHorseTurnView, default on) ---
+    // While riding, the left stick steers the horse, so without this the view
+    // stays put while the horse turns underneath. Each frame, rotate the view
+    // by however far the horse's facing moved -- the player's look direction
+    // RELATIVE TO THE HORSE is preserved (looking right stays looking right
+    // through a left turn), and never snaps to horse-forward. The horse's
+    // yaw only changes once per sim tick, so it's interpolated between the
+    // last two ticks (same step as the rest of the presentation) to avoid a
+    // 30Hz stair-step at display rate.
+    {
+        static bool s_horseFollowActive = false;
+        static s16 s_horseYawPrevS = 0, s_horseYawCurrS = 0, s_horseYawAppliedS = 0;
+        static uint64_t s_horseYawTick = 0;
+
+        daHorse_c* horse = nullptr;
+        if (dusk::getSettings().game.vrHorseTurnView.getValue()) {
+            auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
+            if (link != nullptr && link->checkHorseRide() && !link->checkEventRun()) {
+                horse = dComIfGp_getHorseActor();
+            }
+        }
+
+        if (horse == nullptr) {
+            s_horseFollowActive = false;
+        } else {
+            const s16 yawS = horse->shape_angle.y;
+            const uint64_t tick = dusk::interp::sim_tick_seq();
+            if (!s_horseFollowActive) {
+                s_horseYawPrevS = s_horseYawCurrS = s_horseYawAppliedS = yawS;
+                s_horseYawTick = tick;
+                s_horseFollowActive = true;
+            } else {
+                if (tick != s_horseYawTick) {
+                    s_horseYawPrevS = s_horseYawCurrS;
+                    s_horseYawCurrS = yawS;
+                    s_horseYawTick = tick;
+                }
+                const float step = dusk::interp::get_interpolation_step();
+                const s16 presentedS = static_cast<s16>(
+                    s_horseYawPrevS +
+                    static_cast<s16>(static_cast<s16>(s_horseYawCurrS - s_horseYawPrevS) * step));
+                const s16 deltaS = static_cast<s16>(presentedS - s_horseYawAppliedS);
+                s_horseYawAppliedS = presentedS;
+                if (deltaS != 0) {
+                    dusk::vr::snapScriptedCameraYaw(cM_s2rad(deltaS));
+                }
+            }
         }
     }
 
