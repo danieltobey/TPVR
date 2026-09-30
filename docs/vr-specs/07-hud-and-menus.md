@@ -23,7 +23,7 @@
 - Settings text in the Dusklight overlay is sharp and stable, like the start screen. 🟡
 
 ## Open issues
-- Start screen (screenshot 2026-09-29, after requirement 2): "✓ Disc ready" overlaps "QUIT", and the version text runs past the panel's right edge. Possibly caused by the canvas cap (something sized in fixed pixels rather than density-independent units); compare with the cap disabled.
+- Start screen (screenshot 2026-09-29, after requirement 2): "✓ Disc ready" overlaps "QUIT", and the version text runs past the panel's right edge. Out of scope: this is an existing upstream issue, not caused by the canvas cap (confirmed by the tester, 2026-09-29).
 
 ## Notes
 Requirement 2 changes `extern/aurora`; the PR needs an Aurora commit and a submodule bump.

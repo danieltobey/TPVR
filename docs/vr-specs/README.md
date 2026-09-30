@@ -29,7 +29,7 @@ Spec-driven development for the TPVR comfort, lighting, audio and presentation w
 | [07 HUD & menus](07-hud-and-menus.md) | 🟡 Built |
 | [08 Render resolution](08-render-resolution.md) | 🟡 Built |
 | [09 VR settings page](09-vr-settings-page.md) | 🟡 Built |
-| [10 Dev tooling](10-dev-tooling.md) | Phase 1 🟡 (screenshot ✅, mirror ✅); phases 2–3 📝 approved |
+| [10 Dev tooling](10-dev-tooling.md) | Phase 1 🟡 (screenshot ✅, mirror ✅); phase 2: remote console ✅, rest 📝 approved; phase 3 📝 approved |
 | Anti-aliasing | 📝 To be specified |
 | Dynamic resolution scaling | 📝 To be specified |
 | Performance investigation | 📝 To be specified |

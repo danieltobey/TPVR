@@ -11,6 +11,7 @@
 #include <windows.h>  // RenderDoc capture-trigger hooks below (GetModuleHandleA/GetAsyncKeyState/etc.)
 #endif
 #include "dusk/vr/vr_debug_log.hpp"  // dusk::vr::duskVrLog/duskVrSnprintf -- portable OutputDebugStringA/_snprintf_s stand-ins
+#include "dusk/vr/vr_devtools_console.hpp"  // DUSK_VR_DEVTOOLS: remote console (tools/cmd.sh)
 #include "DynamicLink.h"
 #include "JSystem/JAudio2/JASAudioThread.h"
 #include "JSystem/JAudio2/JAUSoundTable.h"
@@ -405,6 +406,9 @@ void main01(void) {
                     dusk::mouse::read();
                     dusk::gyro::read(dusk::game_clock::kSimPeriod);
                     dusk::processGameCombos();
+#if DUSK_VR_DEVTOOLS
+                    dusk::vr::devtools::processRemoteCommands();
+#endif
                     fapGm_Execute();
                     dusk::processCameraCommands();
                     mDoAud_Execute();
@@ -469,6 +473,9 @@ void main01(void) {
             dusk::mouse::read();
             dusk::gyro::read(timing.dt);
             dusk::processGameCombos();
+#if DUSK_VR_DEVTOOLS
+            dusk::vr::devtools::processRemoteCommands();
+#endif
 
             // EXECUTE GAME LOGIC & RENDER
             // This calls mDoGph_Painter -> JFWDisplay -> GX Functions

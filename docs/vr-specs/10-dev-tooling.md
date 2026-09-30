@@ -1,6 +1,6 @@
 # 10 Dev tooling
 
-**Status:** Phase 1 🟡 Built: screenshot ✅, live mirror ✅, keep-awake awaiting the 30-minute check. Phases 2–3 📝 Approved, not started.
+**Status:** Phase 1 🟡 Built: screenshot ✅, live mirror ✅, keep-awake awaiting the 30-minute check. Phase 2: remote console ✅; items 5–7 📝 approved, not started. Phase 3 📝 Approved, not started.
 
 ## Problem
 Development depends on the tester relaying what they see, and on a headset connection that drops whenever the Quest sleeps (stale Wi-Fi adb, interrupted installs). Changes can't be checked without someone wearing the headset, the Windows build is never compiled, and there's no fast way to catch regressions in the maths or to profile performance.
@@ -18,7 +18,9 @@ Tooling for the dev environment in `~/Documents/TPVR-dev` and debug-only code in
 
 ## Phase 2: Automation and safety nets
 
-4. **Remote console.** `tools/cmd.sh "<command>"` runs a Dusklight console command in the running game (e.g. `warp F_SP103 0 0`, `tp x y z`), via the same trigger-file mechanism, with output written to the log. Debug builds only.
+4. **Remote console.** `tools/cmd.sh "<command>" ["<command>" …]` runs Dusklight console commands in the running game (e.g. `warp F_SP103 0 0`, `tp x y z`, `help`) and prints their output; with no arguments it reads commands from stdin, one per line. Output is also written to the log (`[devtools]` prefix). Debug builds only.
+   - Mechanism: request files `devtools/cmd/<id>.req` (ids start with a timestamp, so concurrent calls don't collide and run in order); the game checks about every 250 ms and answers in `<id>.out`.
+   - Commands run at the start of a game tick, before game logic, never mid-draw. One console state persists across calls (`@found`, history), as in the in-game console.
 5. **Test driver.** Console commands for scripted input, for repeatable scenarios:
    - `input stick <x> <y> <seconds>`: hold the left stick.
    - `input turn <degrees>`: rotate the view (smooth-turn yaw).
@@ -41,7 +43,7 @@ Tooling for the dev environment in `~/Documents/TPVR-dev` and debug-only code in
 | 1 | With `awake`, the headset stays connected for 30+ minutes off-head; `normal` restores sleep. |
 | 2 | scrcpy shows the live view. ✅ (scrcpy 4.1) |
 | 3 | `screenshot.sh` returns the side-by-side PNG of both eyes within ~2 s. ✅ |
-| 4 | `cmd.sh "warp …"` warps the game; output appears in the log. |
+| 4 | `cmd.sh "warp …"` warps the game; output appears in the log. ✅ (`warp F_SP103 0 0` → Ordon, `pos` confirms; 2026-09-29) |
 | 5 | A scenario (warp to Ordon, run forward 3 s, screenshot) produces the same screenshots twice in a row. |
 | 6 | `test.sh` runs all tests in under a minute; a deliberately broken helper fails a test. |
 | 7 | A push to the fork produces green Android and Windows builds. |
