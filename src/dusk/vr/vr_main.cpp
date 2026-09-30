@@ -2486,10 +2486,8 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
                     vr_render::g_tvModeActive = true;
                     vr_render::g_tvEye = view->lookat.eye;
                     vr_render::g_tvCenter = view->lookat.center;
-                    const float camHalf =
-                        std::clamp(view->fovy, 5.f, 150.f) * 0.5f * (3.14159265f / 180.f);
                     vr_render::g_tvZoom =
-                        vr_render::tvScreenTanHalfFovy(view->aspect) / std::tan(camHalf);
+                        math::tvZoom(vr_render::tvScreenTanHalfFovy(view->aspect), view->fovy);
                     g_cutsceneFrame.distance =
                         static_cast<float>(dusk::getSettings().game.vrTvDistance.getValue());
                 }
@@ -2822,11 +2820,9 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         if (!g_vrLightCamValid) {
             g_vrLightYawRad = headYawRad;
         } else {
-            float delta = headYawRad - g_vrLightYawRad;
-            delta = std::remainder(delta, 2.f * 3.14159265f);  // shortest way round
             const float blend =
-                1.f - std::exp(-static_cast<float>(pacing.dt) / kVrLightYawTimeConstantSec);
-            g_vrLightYawRad = std::remainder(g_vrLightYawRad + delta * blend, 2.f * 3.14159265f);
+                math::expBlend(static_cast<float>(pacing.dt), kVrLightYawTimeConstantSec);
+            g_vrLightYawRad = math::followAngle(g_vrLightYawRad, headYawRad, blend);
         }
         g_vrLightEye[0] = vrCameraEyeAnchor.x;
         g_vrLightEye[1] = vrCameraEyeAnchor.y;

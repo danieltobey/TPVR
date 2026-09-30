@@ -115,14 +115,9 @@ struct Vec3f { float x, y, z; };
 // R(q)^T generally disagree at any non-identity q, which the controller's
 // real neutral grip orientation is.
 inline Vec3f rotateVecByQuat(float qx, float qy, float qz, float qw, const Vec3f& v) {
-    const float xx = qx*qx, yy = qy*qy, zz = qz*qz;
-    const float xy = qx*qy, xz = qx*qz, yz = qy*qz;
-    const float wx = qw*qx, wy = qw*qy, wz = qw*qz;
-    return Vec3f{
-        (1.f - 2.f*(yy+zz))*v.x + 2.f*(xy-wz)*v.y        + 2.f*(xz+wy)*v.z,
-        2.f*(xy+wz)*v.x        + (1.f - 2.f*(xx+zz))*v.y + 2.f*(yz-wx)*v.z,
-        2.f*(xz-wy)*v.x        + 2.f*(yz+wx)*v.y          + (1.f - 2.f*(xx+yy))*v.z,
-    };
+    const dusk::vr::math::Vec3 r = dusk::vr::math::rotateByQuatMatrix(
+        dusk::vr::math::Quat{qx, qy, qz, qw}, dusk::vr::math::Vec3{v.x, v.y, v.z});
+    return Vec3f{r.x, r.y, r.z};
 }
 
 // RIGHT-hand rotation calibration -- derived from real isolated-axis data
@@ -3426,7 +3421,7 @@ inline cXyz computeRawStanceAnchoredEye(daAlink_c* link) {
         s_stanceHeightFilterValid = true;
         s_stanceHeightLastSimTick = simTick;
     } else if (simTick != s_stanceHeightLastSimTick) {
-        s_stanceHeight += (sample - s_stanceHeight) * kStanceHeightFilterAlpha;
+        s_stanceHeight = dusk::vr::math::lowPass(s_stanceHeight, sample, kStanceHeightFilterAlpha);
         s_stanceHeightLastSimTick = simTick;
     }
     return cXyz{link->current.pos.x, link->current.pos.y + s_stanceHeight, link->current.pos.z};

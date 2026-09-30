@@ -18,6 +18,7 @@
 #include "Z2AudioLib/Z2Instances.h"
 #if TARGET_PC
 #include "dusk/vr/vr_main.hpp"
+#include "dusk/vr/vr_math.hpp"
 #endif
 #include "JSystem/JAudio2/JAUSectionHeap.h"
 #include <cmath>
@@ -1547,16 +1548,8 @@ void daHorse_c::setStickData() {
                     if (dusk::vr::isRenderingToHeadset()) {
                         constexpr f32 kVrHorseSteerDeadzoneDeg = 20.0f;
                         const s16 rel = (s16)(m_padStickAngleY - shape_angle.y);
-                        const f32 relDeg = rel * (180.0f / 32768.0f);
-                        const f32 mag = fabsf(relDeg);
-                        f32 outDeg = 0.0f;
-                        if (mag > kVrHorseSteerDeadzoneDeg) {
-                            outDeg = (mag - kVrHorseSteerDeadzoneDeg) *
-                                     (180.0f / (180.0f - kVrHorseSteerDeadzoneDeg));
-                            if (relDeg < 0.0f) {
-                                outDeg = -outDeg;
-                            }
-                        }
+                        const f32 outDeg = dusk::vr::math::horseSteerRemapDeg(
+                            rel * (180.0f / 32768.0f), kVrHorseSteerDeadzoneDeg);
                         m_padStickAngleY = shape_angle.y + (s16)(outDeg * (32768.0f / 180.0f));
                     }
 #endif

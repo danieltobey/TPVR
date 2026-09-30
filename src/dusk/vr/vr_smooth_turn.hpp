@@ -37,6 +37,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "dusk/vr/vr_math.hpp"
+
 namespace dusk::vr {
 
 // Persistent yaw offset, radians, OpenXR/tracking-space convention
@@ -189,14 +191,18 @@ inline constexpr float kZTargetCameraSettleThresholdDeg = 0.5f;
 inline constexpr int kZTargetCameraSettleRequiredConsecutiveFrames = 5;
 inline constexpr float kZTargetCameraTrackMaxDurationSec = 1.5f;
 
+// Conversions between OpenXR types and the pure-maths types in vr_math.hpp.
+inline math::Vec3 toMath(const XrVector3f& v) { return math::Vec3{v.x, v.y, v.z}; }
+inline math::Quat toMath(const XrQuaternionf& q) { return math::Quat{q.x, q.y, q.z, q.w}; }
+inline XrVector3f toXr(const math::Vec3& v) { return XrVector3f{v.x, v.y, v.z}; }
+inline XrQuaternionf toXr(const math::Quat& q) { return XrQuaternionf{q.x, q.y, q.z, q.w}; }
+
 // Rotates an OpenXR-tracking-space vector around the vertical (+Y) axis by
 // yawRad. Explicit parameter rather than reading the global above directly
 // -- keeps this pure/testable and matches eyePoseToViewMtx's existing style
 // of taking `scale` as an explicit parameter instead of a hidden global.
 inline XrVector3f rotateYawXr(const XrVector3f& v, float yawRad) {
-    const float s = std::sin(yawRad);
-    const float c = std::cos(yawRad);
-    return XrVector3f{ v.x * c + v.z * s, v.y, -v.x * s + v.z * c };
+    return toXr(math::rotateYaw(toMath(v), yawRad));
 }
 
 // Composes a yaw rotation onto an orientation quaternion in world/tracking
@@ -206,14 +212,7 @@ inline XrVector3f rotateYawXr(const XrVector3f& v, float yawRad) {
 // (e.g. a hand's offset from the head) stays self-consistent under the
 // applied yaw. RotateY(yawRad) = (0, sin(yawRad/2), 0, cos(yawRad/2)).
 inline XrQuaternionf rotateYawQuat(const XrQuaternionf& q, float yawRad) {
-    const float hs = std::sin(yawRad * 0.5f);
-    const float hc = std::cos(yawRad * 0.5f);
-    return XrQuaternionf{
-        hc * q.x + hs * q.z,
-        hc * q.y + hs * q.w,
-        hc * q.z - hs * q.x,
-        hc * q.w - hs * q.y,
-    };
+    return toXr(math::rotateYawQuat(toMath(q), yawRad));
 }
 
 }  // namespace dusk::vr

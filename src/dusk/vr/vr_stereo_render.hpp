@@ -251,11 +251,9 @@ inline cXyz g_tvCenter;
 // ~40.9-degree-tall screen.
 inline float tvScreenTanHalfFovy(float aspect) {
     const auto& game = dusk::getSettings().game;
-    const float diagCm = static_cast<float>(game.vrTvSize.getValue());
-    const float distCm = std::max(static_cast<float>(game.vrTvDistance.getValue()), 1.f);
-    const float a = std::clamp(aspect, 0.5f, 3.f);
-    const float heightCm = diagCm / std::sqrt(1.f + a * a);
-    return (heightCm * 0.5f) / distCm;
+    return dusk::vr::math::tvScreenTanHalfFovy(static_cast<float>(game.vrTvSize.getValue()),
+                                               static_cast<float>(game.vrTvDistance.getValue()),
+                                               aspect);
 }
 inline float g_tvZoom = 1.f;
 
@@ -274,26 +272,11 @@ inline Mtx g_overlayEyeT[2];
 
 // Rotates v by the inverse (conjugate) of unit quaternion q.
 inline XrVector3f rotateByQuatInverse(const XrQuaternionf& q, const XrVector3f& v) {
-    const float qx = -q.x, qy = -q.y, qz = -q.z, qw = q.w;
-    const float tx = 2.f * (qy * v.z - qz * v.y);
-    const float ty = 2.f * (qz * v.x - qx * v.z);
-    const float tz = 2.f * (qx * v.y - qy * v.x);
-    return XrVector3f{
-        v.x + qw * tx + (qy * tz - qz * ty),
-        v.y + qw * ty + (qz * tx - qx * tz),
-        v.z + qw * tz + (qx * ty - qy * tx),
-    };
+    return dusk::vr::toXr(dusk::vr::math::rotateByQuatInverse(dusk::vr::toMath(q), dusk::vr::toMath(v)));
 }
 
 inline XrVector3f rotateByQuat(const XrQuaternionf& q, const XrVector3f& v) {
-    const float tx = 2.f * (q.y * v.z - q.z * v.y);
-    const float ty = 2.f * (q.z * v.x - q.x * v.z);
-    const float tz = 2.f * (q.x * v.y - q.y * v.x);
-    return XrVector3f{
-        v.x + q.w * tx + (q.y * tz - q.z * ty),
-        v.y + q.w * ty + (q.z * tx - q.x * tz),
-        v.z + q.w * tz + (q.x * ty - q.y * tx),
-    };
+    return dusk::vr::toXr(dusk::vr::math::rotateByQuat(dusk::vr::toMath(q), dusk::vr::toMath(v)));
 }
 
 // TV "floatiness" (2026-09-29, modelled on the load-game/menu billboard):
@@ -1143,11 +1126,10 @@ inline void updateHudSmoothing(const XrPosef& headPose, float yawRad) {
         return;
     }
 
-    g_hudSmoothedWorldForward.x += (rawForward.x - g_hudSmoothedWorldForward.x) * kHudDampingAlpha;
-    g_hudSmoothedWorldForward.y += (rawForward.y - g_hudSmoothedWorldForward.y) * kHudDampingAlpha;
-    g_hudSmoothedWorldForward.z += (rawForward.z - g_hudSmoothedWorldForward.z) * kHudDampingAlpha;
-    // Lerping two unit vectors shrinks the result -- renormalize.
-    normalizeInPlace(g_hudSmoothedWorldForward);
+    cXyz& fwd = g_hudSmoothedWorldForward;
+    const dusk::vr::math::Vec3 damped = dusk::vr::math::dampDirection(
+        {fwd.x, fwd.y, fwd.z}, {rawForward.x, rawForward.y, rawForward.z}, kHudDampingAlpha);
+    fwd.set(damped.x, damped.y, damped.z);
 }
 
 // One quad's worth of eye-space corners, in draw order (top-left, top-right,
@@ -1209,11 +1191,10 @@ inline HudQuadCorners computeHudPose() {
     const auto& game = dusk::getSettings().game;
     const float distM = game.vrHudDistance.getValue() / 100.f;
     constexpr float kHudAspect = 448.0f / 608.0f;  // height / width
-    const float widthM =
-        (game.vrHudSize.getValue() / 100.f) / std::sqrt(1.f + kHudAspect * kHudAspect);
-    const float heightM = widthM * kHudAspect;
-    const float halfW = widthM * 0.5f * kHudUnitsPerMetre;
-    const float halfH = heightM * 0.5f * kHudUnitsPerMetre;
+    const dusk::vr::math::PanelSize sizeM =
+        dusk::vr::math::panelFromDiagonal(game.vrHudSize.getValue() / 100.f, kHudAspect);
+    const float halfW = sizeM.width * 0.5f * kHudUnitsPerMetre;
+    const float halfH = sizeM.height * 0.5f * kHudUnitsPerMetre;
     const float dist = distM * kHudUnitsPerMetre;
     return computeBillboardPose(g_hudSmoothedWorldForward, dist, halfW, halfH);
 }

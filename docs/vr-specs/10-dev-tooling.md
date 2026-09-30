@@ -1,6 +1,6 @@
 # 10 Dev tooling
 
-**Status:** Phase 1 🟡 Built: screenshot ✅, live mirror ✅, keep-awake awaiting the 30-minute check. Phase 2: remote console ✅, test driver ✅; items 6–7 📝 approved, not started. Phase 3 📝 Approved, not started.
+**Status:** Phase 1 🟡 Built: screenshot ✅, live mirror ✅, keep-awake awaiting the 30-minute check. Phase 2: remote console ✅, test driver ✅, unit tests 🟡 (host checks pass; headset regression check pending); CI 📝 approved, not started. Phase 3 📝 Approved, not started.
 
 ## Problem
 Development depends on the tester relaying what they see, and on a headset connection that drops whenever the Quest sleeps (stale Wi-Fi adb, interrupted installs). Changes can't be checked without someone wearing the headset, the Windows build is never compiled, and there's no fast way to catch regressions in the maths or to profile performance.
@@ -37,7 +37,10 @@ Tooling for the dev environment in `~/Documents/TPVR-dev` and debug-only code in
      The script's output comes back when it ends; `scenario.sh` then pulls its screenshots into `logs/shots/` and prints their paths. Requests queue: a request sent while a script is running waits for it.
    - Scenario scripts live in `tools/scenarios/*.txt`; `#` starts a comment line.
 
-6. **Host unit tests.** A small test target (doctest), built and run natively in the container (`tools/test.sh`, seconds, no headset), covering the pure maths: quaternion rotation helpers, horse deadzone remap, TV zoom and size, HUD sizing, stance-height filter, interpolation.
+6. **Host unit tests.** A small test program (doctest), built and run natively in the container (`tools/test.sh`, seconds, no headset), covering the pure maths: quaternion rotation helpers, horse deadzone remap, TV zoom and size, HUD sizing, stance-height filter, direction and angle smoothing. *(Approach approved 2026-09-29.)*
+   - **Pure maths header.** The maths moves into `src/dusk/vr/vr_math.hpp`, which includes only the C++ standard library (its own small `Vec3`/`Quat` types; no game, OpenXR or Aurora headers). Its functions take plain numbers and return plain numbers.
+   - **Call sites unchanged in behaviour.** The game code keeps reading settings and game state itself and calls these functions with the values; the formulas are moved, not changed.
+   - **Standalone test build.** `tests/vr/` is its own CMake project (doctest header vendored in `extern/doctest/`), independent of the game and Android builds. Compiled with the latest stable clang in the container (clang 23 from apt.llvm.org).
 7. **CI on the fork.** GitHub Actions enabled on `danieltobey/TPVR`, so every push builds Android and Windows. Confirms the Windows build compiles before a PR.
 
 ## Phase 3: Performance and debugging
@@ -55,7 +58,7 @@ Tooling for the dev environment in `~/Documents/TPVR-dev` and debug-only code in
 | 3 | `screenshot.sh` returns the side-by-side PNG of both eyes within ~2 s. ✅ |
 | 4 | `cmd.sh "warp …"` warps the game; output appears in the log. ✅ (`warp F_SP103 0 0` → Ordon, `pos` confirms; 2026-09-29) |
 | 5 | A scenario (warp to Ordon, `wait ready`, head lock, run forward 3 s, turn 90°, screenshot) run twice gives the same `pos` (within 1 unit) and screenshots that match by eye. Not pixel-identical: animals, NPCs, water and wind animate independently of input. ✅ (`tools/scenarios/ordon-walk.txt` twice: identical `pos`, 0.4% of pixels differ; 2026-09-29) |
-| 6 | `test.sh` runs all tests in under a minute; a deliberately broken helper fails a test. |
+| 6 | `test.sh` runs all tests in under a minute; a deliberately broken helper fails a test. ✅ (21 tests, ~2 s; a broken horse remap fails 2; 2026-09-29) In the headset, the moved maths behaves as before: horse steering deadzone, TV size in a cutscene, HUD size, crawl/swim eye height, HUD and fill-light smoothing. |
 | 7 | A push to the fork produces green Android and Windows builds. |
 | 8 | The Tracy viewer shows live frame zones from the headset. |
 | 9 | Metrics CSV lands in `logs/`. |
