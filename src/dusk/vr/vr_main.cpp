@@ -50,6 +50,7 @@
 #include "dusk/vr/vr_menu_gamepad.hpp"          // dusk::vr::ensureVrMenuGamepadAttached, etc.
 #include "dusk/vr/vr_main.hpp"
 #include "dusk/vr/vr_devtools.hpp"            // DUSK_VR_DEVTOOLS: screenshots etc.
+#include "dusk/vr/vr_devtools_console.hpp"    // DUSK_VR_DEVTOOLS: test driver (scripted input, head lock)
 #include "d/actor/d_a_horse.h"                // daHorse_c -- horse turn follow
 #include "dusk/interp/frame_interpolation.h"   // sim_tick_seq/get_interpolation_step
 
@@ -482,6 +483,47 @@ void drawHudBillboard(TGXTexObj* hudTex) {
 static XrPosef locateSpace(XrSpace space, XrSpace base, XrTime time,
                             XrSpaceLocationFlags* outFlags = nullptr);
 
+// Dev tooling `head lock` (spec 10 item 5): while locked, the head is at a
+// fixed pose -- the LOCAL space origin (the recentre point), level and facing
+// forward -- instead of wherever the headset really is, so scripted runs give
+// the same view regardless of who's wearing it. Applied to every HMD pose the
+// game reads and to both eye views (re-expressed relative to the fixed head).
+static XrPosef lockedHead(const XrPosef& head) {
+#if DUSK_VR_DEVTOOLS
+    if (dusk::vr::devtools::isHeadLocked()) {
+        return XrPosef{{0, 0, 0, 1}, {0, 0, 0}};
+    }
+#endif
+    return head;
+}
+
+static void lockEyeViews([[maybe_unused]] std::vector<XrView>& views,
+                         [[maybe_unused]] const XrPosef& head) {
+#if DUSK_VR_DEVTOOLS
+    if (!dusk::vr::devtools::isHeadLocked()) {
+        return;
+    }
+    // eye' = head^-1 * eye: the eye's pose relative to the head, placed on
+    // the fixed (identity) head.
+    const XrQuaternionf& h = head.orientation;
+    for (XrView& view : views) {
+        const XrQuaternionf& e = view.pose.orientation;
+        const XrVector3f d{view.pose.position.x - head.position.x,
+                           view.pose.position.y - head.position.y,
+                           view.pose.position.z - head.position.z};
+        view.pose.position = vr_render::rotateByQuatInverse(h, d);
+        // conj(h) * e
+        const float hx = -h.x, hy = -h.y, hz = -h.z, hw = h.w;
+        view.pose.orientation = XrQuaternionf{
+            hw * e.x + hx * e.w + hy * e.z - hz * e.y,
+            hw * e.y - hx * e.z + hy * e.w + hz * e.x,
+            hw * e.z + hx * e.y - hy * e.x + hz * e.w,
+            hw * e.w - hx * e.x - hy * e.y - hz * e.z,
+        };
+    }
+#endif
+}
+
 // LATE-LATCHING: re-locates the HMD + both controller grip spaces again
 // right before writing the tracked-hand joints, on the theory that a
 // slightly later real-time sample lets the runtime's xrLocateSpace
@@ -498,7 +540,7 @@ void applyTrackedHandMtx(J3DModel* handModel) {
     if (g_session) {
         const XrTime time = g_session->predictedDisplayTime();
         const XrSpace base = g_session->localSpace();
-        const XrPosef hmdPose = locateSpace(g_viewSpace, base, time);
+        const XrPosef hmdPose = lockedHead(locateSpace(g_viewSpace, base, time));
         const XrPosef rightPose = locateSpace(g_rightGripSpace, base, time);
         const XrPosef leftPose = locateSpace(g_leftGripSpace, base, time);
 
@@ -1701,7 +1743,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     }
     perfLap(1);  // xrSyncActions alone
 
-    const XrPosef hmdPose = locateSpace(g_viewSpace, base, time);
+    const XrPosef hmdPose = lockedHead(locateSpace(g_viewSpace, base, time));
     perfLap(6);  // HMD (VIEW space) locate alone
     const XrPosef rightPose = locateSpace(g_rightGripSpace, base, time);
     const XrPosef leftPose = locateSpace(g_leftGripSpace, base, time);
@@ -2211,6 +2253,11 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
                 static_cast<float>(turnSettings.vrSmoothTurnSpeed.getValue()));
         }
     }
+#if DUSK_VR_DEVTOOLS
+    // Test driver `input turn` (spec 10 item 5): positive = right, and turning
+    // right lowers the yaw, as the right stick does.
+    dusk::vr::g_smoothTurnYawRad -= dusk::vr::devtools::takeScriptedTurnRad();
+#endif
 
     // --- Horse riding: turn the view with Epona (2026-09-29,
     // game.vrHorseTurnView, default on) ---
@@ -2670,6 +2717,9 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     }
 
     constexpr u32 kVrPadPort = PAD_CHAN0;
+#if DUSK_VR_DEVTOOLS
+    dusk::vr::devtools::applyScriptedInput(padStatus);  // test driver (spec 10 item 5)
+#endif
     // substickX/Y checks re-added 2026-08-14 -- section 15 dropped them as
     // "always zero" when the C-stick was fully unbound from padStatus; the
     // fishing-only C-stick rebind above (isFishingRodActive()) can now
@@ -2816,6 +2866,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     std::vector<XrView> views(viewCount, XrView{XR_TYPE_VIEW});
     xrLocateViews(g_session->session(), &locateInfo, &viewState, viewCount, &viewCount,
                   views.data());
+    lockEyeViews(views, locateSpace(g_viewSpace, base, time));
 
     std::vector<XrViewConfigurationView> configViews =
         g_session->enumerateViewConfigurationViews(XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO);

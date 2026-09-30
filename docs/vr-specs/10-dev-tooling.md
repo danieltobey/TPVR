@@ -1,6 +1,6 @@
 # 10 Dev tooling
 
-**Status:** Phase 1 🟡 Built: screenshot ✅, live mirror ✅, keep-awake awaiting the 30-minute check. Phase 2: remote console ✅; items 5–7 📝 approved, not started. Phase 3 📝 Approved, not started.
+**Status:** Phase 1 🟡 Built: screenshot ✅, live mirror ✅, keep-awake awaiting the 30-minute check. Phase 2: remote console ✅, test driver ✅; items 6–7 📝 approved, not started. Phase 3 📝 Approved, not started.
 
 ## Problem
 Development depends on the tester relaying what they see, and on a headset connection that drops whenever the Quest sleeps (stale Wi-Fi adb, interrupted installs). Changes can't be checked without someone wearing the headset, the Windows build is never compiled, and there's no fast way to catch regressions in the maths or to profile performance.
@@ -21,12 +21,22 @@ Tooling for the dev environment in `~/Documents/TPVR-dev` and debug-only code in
 4. **Remote console.** `tools/cmd.sh "<command>" ["<command>" …]` runs Dusklight console commands in the running game (e.g. `warp F_SP103 0 0`, `tp x y z`, `help`) and prints their output; with no arguments it reads commands from stdin, one per line. Output is also written to the log (`[devtools]` prefix). Debug builds only.
    - Mechanism: request files `devtools/cmd/<id>.req` (ids start with a timestamp, so concurrent calls don't collide and run in order); the game checks about every 250 ms and answers in `<id>.out`.
    - Commands run at the start of a game tick, before game logic, never mid-draw. One console state persists across calls (`@found`, history), as in the in-game console.
-5. **Test driver.** Console commands for scripted input, for repeatable scenarios:
-   - `input stick <x> <y> <seconds>`: hold the left stick.
-   - `input turn <degrees>`: rotate the view (smooth-turn yaw).
-   - `input button <name> <seconds>`
-   - `head lock|unlock`: freeze the head pose so runs don't depend on who's wearing it.
-   Scenario scripts (`tools/scenarios/*.txt`) chain these with `screenshot` and `wait`.
+5. **Test driver.** Console commands for scripted input, for repeatable scenarios. *(Refined and approved 2026-09-29.)*
+   - `input stick <x> <y> <seconds>`: hold the left stick (x, y from −1 to 1, like the thumbstick; replaces the real stick while held).
+   - `input button <name> <seconds>`: hold a game button (`a b x y z l r start up down left right`, GameCube names), added to any real presses.
+   - `input turn <degrees>`: turn the view instantly, as smooth turn does (positive = right).
+   - `input stop`: release all scripted input.
+   - `menu close`: close any open menus. Menus block the game's controller input, and warping from the title screen leaves the title menu open.
+   - Held input is timed in game ticks (30 per second), not wall-clock time, so the same script gives the same movement regardless of frame rate. Commands return immediately; use `wait` to let them play out.
+   - `head lock|unlock`: while locked, the view uses a fixed head pose (level, facing play-space forward, at the recentre point) instead of the tracked one, so runs don't depend on where the headset is or who's wearing it. The compositor still reprojects to the real head in the headset; screenshots show the locked view. Controllers stay tracked (lay them down for repeatable shots).
+   - **Scenarios run in the game.** `tools/scenario.sh <file>` sends the whole script as one request (the remote console mechanism, item 4); the game runs its lines in order:
+     - `wait <seconds>`: pause the script, counted in game ticks.
+     - `wait ready`: pause until a stage change has finished and Link is in the world (for use after `warp`).
+     - `screenshot <name>`: capture the next frame (item 3), named `<scenario>-<name>`.
+     - any console command.
+     The script's output comes back when it ends; `scenario.sh` then pulls its screenshots into `logs/shots/` and prints their paths. Requests queue: a request sent while a script is running waits for it.
+   - Scenario scripts live in `tools/scenarios/*.txt`; `#` starts a comment line.
+
 6. **Host unit tests.** A small test target (doctest), built and run natively in the container (`tools/test.sh`, seconds, no headset), covering the pure maths: quaternion rotation helpers, horse deadzone remap, TV zoom and size, HUD sizing, stance-height filter, interpolation.
 7. **CI on the fork.** GitHub Actions enabled on `danieltobey/TPVR`, so every push builds Android and Windows. Confirms the Windows build compiles before a PR.
 
@@ -44,7 +54,7 @@ Tooling for the dev environment in `~/Documents/TPVR-dev` and debug-only code in
 | 2 | scrcpy shows the live view. ✅ (scrcpy 4.1) |
 | 3 | `screenshot.sh` returns the side-by-side PNG of both eyes within ~2 s. ✅ |
 | 4 | `cmd.sh "warp …"` warps the game; output appears in the log. ✅ (`warp F_SP103 0 0` → Ordon, `pos` confirms; 2026-09-29) |
-| 5 | A scenario (warp to Ordon, run forward 3 s, screenshot) produces the same screenshots twice in a row. |
+| 5 | A scenario (warp to Ordon, `wait ready`, head lock, run forward 3 s, turn 90°, screenshot) run twice gives the same `pos` (within 1 unit) and screenshots that match by eye. Not pixel-identical: animals, NPCs, water and wind animate independently of input. ✅ (`tools/scenarios/ordon-walk.txt` twice: identical `pos`, 0.4% of pixels differ; 2026-09-29) |
 | 6 | `test.sh` runs all tests in under a minute; a deliberately broken helper fails a test. |
 | 7 | A push to the fork produces green Android and Windows builds. |
 | 8 | The Tracy viewer shows live frame zones from the headset. |

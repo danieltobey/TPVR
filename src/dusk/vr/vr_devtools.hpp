@@ -28,6 +28,7 @@
 #include <SDL3/SDL_system.h>
 #endif
 
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -103,6 +104,27 @@ inline void registerTasks() {
     shot().taskId = aurora::gfx::register_encoder_task_type(desc);
 }
 
+// Ask for the next rendered frame to be saved as shots/<name>.png. The name
+// is reduced to a safe file stem.
+inline void requestShot(const std::string& name) {
+    std::string clean;
+    for (char c : name) {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_') {
+            clean += c;
+        }
+    }
+    if (clean.empty()) {
+        clean = "shot";
+    }
+    shot().name = clean;
+    shot().requested = true;
+}
+
+// True from requestShot() until the PNG has been written.
+inline bool shotInProgress() {
+    return shot().requested || shot().pending;
+}
+
 // Once per frame. Checks the request file at most once a second.
 inline void pollTriggers() {
     using Clock = std::chrono::steady_clock;
@@ -124,18 +146,7 @@ inline void pollTriggers() {
         std::getline(in, name);
     }
     std::filesystem::remove(req, ec);
-    // Keep the name to a safe file stem.
-    std::string clean;
-    for (char c : name) {
-        if (std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_') {
-            clean += c;
-        }
-    }
-    if (clean.empty()) {
-        clean = "shot";
-    }
-    shot().name = clean;
-    shot().requested = true;
+    requestShot(name);
 }
 
 // Call right after the stereo/eye pass has ended (back on the EFB pass, where
