@@ -71,6 +71,7 @@ wgpu::Texture ensure_external_copy_texture(const void* dest, uint32_t width, uin
 
 #include "dusk/vr/vr_smooth_turn.hpp"  // dusk::vr::rotateYawXr/rotateYawQuat
 #include "dusk/interp/material.h"     // replay_models_for_current_view()
+#include "dusk/settings.h"              // HUD/TV distance and size settings
 #include "d/d_com_inf_game.h"      // dComIfGd_getView()
 #include "d/d_stage.h"             // dStage_stagInfo_GetCullPoint() -- beginEye() cull far
 #include "f_op/f_op_view.h"        // view_class, lookat_class, Mtx44, Mtx
@@ -228,6 +229,151 @@ inline void eyePoseToViewMtx(
     dest[2][0] = r20; dest[2][1] = r21; dest[2][2] = r22;
     dest[2][3] = static_cast<float>(-(wx_*r20 + wy_*r21 + wz_*r22));
 }
+
+// Cutscene TV mode (game.vrCutsceneView = TV): while active, every eye view
+// is built from the cutscene camera (eye -> center, world up) instead of the
+// headset pose -- only the eye's offset from the head (IPD) is kept, so it
+// stays stereo, and the black frame from drawCutsceneFrame() lands centred:
+// a 3D screen locked in front of the face. Set once per frame by vr_main's
+// tick() before the eye passes.
+inline bool g_tvModeActive = false;
+inline cXyz g_tvEye;
+inline cXyz g_tvCenter;
+// Projection zoom so the cutscene camera's field of view always fills the
+// same fixed-size screen (kTvScreenFovyDeg tall), whatever the camera's own
+// fov: tan(screen/2) / tan(camera/2). Applied to the projection's scale
+// terms only (P00, P11), which zooms about the view's forward axis without
+// touching eye separation or lighting.
+// Screen size from game.vrTvSize (diagonal, cm) / game.vrTvDistance (cm),
+// like a real TV: height = diagonal / sqrt(1 + aspect^2) (the cutscene
+// camera's aspect), and the half-angle it subtends at that distance.
+// Defaults (760 cm diagonal at 500 cm, 16:9) match the earlier fixed
+// ~40.9-degree-tall screen.
+inline float tvScreenTanHalfFovy(float aspect) {
+    const auto& game = dusk::getSettings().game;
+    const float diagCm = static_cast<float>(game.vrTvSize.getValue());
+    const float distCm = std::max(static_cast<float>(game.vrTvDistance.getValue()), 1.f);
+    const float a = std::clamp(aspect, 0.5f, 3.f);
+    const float heightCm = diagCm / std::sqrt(1.f + a * a);
+    return (heightCm * 0.5f) / distCm;
+}
+inline float g_tvZoom = 1.f;
+
+// Overlays (HUD billboard, text boxes, Dusklight menu) are positioned
+// relative to the head, so in TV mode they must be drawn with the NORMAL
+// head view and un-zoomed projection, not the TV view -- otherwise they
+// move and resize with the cutscene camera. beginEye()/beginStereoPass()
+// stash those normal matrices while TV mode is active; switchToOverlayView()
+// installs them after the 3D scene (called right before the HUD billboard).
+inline bool g_overlayViewPending = false;
+inline bool g_overlayIsStereo = false;
+inline Mtx g_overlayViewMtx;
+inline Mtx44 g_overlayProjMtx;
+inline float g_overlayProjVec[2][6];
+inline Mtx g_overlayEyeT[2];
+
+// Rotates v by the inverse (conjugate) of unit quaternion q.
+inline XrVector3f rotateByQuatInverse(const XrQuaternionf& q, const XrVector3f& v) {
+    const float qx = -q.x, qy = -q.y, qz = -q.z, qw = q.w;
+    const float tx = 2.f * (qy * v.z - qz * v.y);
+    const float ty = 2.f * (qz * v.x - qx * v.z);
+    const float tz = 2.f * (qx * v.y - qy * v.x);
+    return XrVector3f{
+        v.x + qw * tx + (qy * tz - qz * ty),
+        v.y + qw * ty + (qz * tx - qx * tz),
+        v.z + qw * tz + (qx * ty - qy * tx),
+    };
+}
+
+inline XrVector3f rotateByQuat(const XrQuaternionf& q, const XrVector3f& v) {
+    const float tx = 2.f * (q.y * v.z - q.z * v.y);
+    const float ty = 2.f * (q.z * v.x - q.x * v.z);
+    const float tz = 2.f * (q.x * v.y - q.y * v.x);
+    return XrVector3f{
+        v.x + q.w * tx + (q.y * tz - q.z * ty),
+        v.y + q.w * ty + (q.z * tx - q.x * tz),
+        v.z + q.w * tz + (q.x * ty - q.y * tx),
+    };
+}
+
+// TV "floatiness" (2026-09-29, modelled on the load-game/menu billboard):
+// the TV sits along a smoothed head-forward direction instead of dead
+// centre, so it trails quick head turns and eases back in front. Smoothed in
+// XR tracking space -- real head motion only -- so cutscene yaw snaps/pans
+// (which rotate the game-world frame) never push it around. Same per-frame
+// damping as the menu (kHudDampingAlpha, defined further down; duplicated
+// value here because it's declared later in this header).
+inline constexpr float kTvDampingAlpha = 0.08f;
+inline XrVector3f g_tvSmoothedFwdXr{0.f, 0.f, -1.f};
+inline bool g_tvSmoothValid = false;
+
+// Once per frame, before the eye passes. Tracks the raw forward exactly
+// while TV mode is off, so it starts centred when a TV cutscene begins.
+inline void updateTvSmoothing(const XrPosef& headPose) {
+    const XrVector3f raw = rotateByQuat(headPose.orientation, XrVector3f{0.f, 0.f, -1.f});
+    if (!g_tvModeActive || !g_tvSmoothValid) {
+        g_tvSmoothedFwdXr = raw;
+        g_tvSmoothValid = true;
+        return;
+    }
+    XrVector3f& s = g_tvSmoothedFwdXr;
+    s.x += (raw.x - s.x) * kTvDampingAlpha;
+    s.y += (raw.y - s.y) * kTvDampingAlpha;
+    s.z += (raw.z - s.z) * kTvDampingAlpha;
+    const float len = std::sqrt(s.x * s.x + s.y * s.y + s.z * s.z);
+    if (len > 1e-4f) {
+        s.x /= len; s.y /= len; s.z /= len;
+    }
+}
+
+// View matrix for one eye: TV mode if active, else the normal headset view.
+inline void buildEyeViewMtx(Mtx dest, const XrPosef& pose, const XrVector3f& hmdRefPos,
+                            const cXyz& anchor, float yawRad) {
+    if (!g_tvModeActive) {
+        eyePoseToViewMtx(dest, pose, hmdRefPos, anchor, kEyePosScale, yawRad);
+        return;
+    }
+    cXyz up(0.f, 1.f, 0.f);
+    mDoMtx_lookAt(dest, &g_tvEye, &g_tvCenter, &up, 0);
+
+    // Float: rotate the TV image so its centre lies along the smoothed
+    // forward (upright w.r.t. real-world up) as seen from the current head
+    // orientation. D maps the TV/camera frame (x right, y up, z back) into
+    // the head's view frame; applied on the left of the camera view.
+    {
+        const XrVector3f dS = rotateByQuatInverse(pose.orientation, g_tvSmoothedFwdXr);
+        const XrVector3f upH = rotateByQuatInverse(pose.orientation, XrVector3f{0.f, 1.f, 0.f});
+        float zx = -dS.x, zy = -dS.y, zz = -dS.z;  // back axis
+        float zl = std::sqrt(zx * zx + zy * zy + zz * zz);
+        const float d = upH.x * zx + upH.y * zy + upH.z * zz;
+        float yx = upH.x - zx * d / (zl * zl), yy = upH.y - zy * d / (zl * zl),
+              yz = upH.z - zz * d / (zl * zl);
+        const float yl = std::sqrt(yx * yx + yy * yy + yz * yz);
+        if (zl > 1e-4f && yl > 1e-4f) {
+            zx /= zl; zy /= zl; zz /= zl;
+            yx /= yl; yy /= yl; yz /= yl;
+            const float xx = yy * zz - yz * zy, xy = yz * zx - yx * zz, xz = yx * zy - yy * zx;
+            const float D[3][3] = {{xx, yx, zx}, {xy, yy, zy}, {xz, yz, zz}};
+            Mtx rotated;
+            for (int r = 0; r < 3; ++r) {
+                for (int c = 0; c < 4; ++c) {
+                    rotated[r][c] = D[r][0] * dest[0][c] + D[r][1] * dest[1][c] + D[r][2] * dest[2][c];
+                }
+            }
+            std::memcpy(dest, rotated, sizeof(Mtx));
+        }
+    }
+
+    // Eye offset from the head centre, in head-local axes (x right, y up,
+    // z back -- same convention as GX view space), scaled to game units.
+    const XrVector3f delta{pose.position.x - hmdRefPos.x, pose.position.y - hmdRefPos.y,
+                           pose.position.z - hmdRefPos.z};
+    const XrVector3f local = rotateByQuatInverse(pose.orientation, delta);
+    dest[0][3] -= local.x * kEyePosScale;
+    dest[1][3] -= local.y * kEyePosScale;
+    dest[2][3] -= local.z * kEyePosScale;
+}
+
 
 // Build a Nintendo-style Mtx44 (4x4, row-major) asymmetric perspective
 // projection from an XrFovf.  This replaces the C_MTXPerspective call that
@@ -422,8 +568,7 @@ inline aurora::gfx::ResolvedTargets beginEye(const EyeParams& eye) {
     // during cutscenes -- see EyeParams::eyeAnchor's comment) rather than
     // treating the raw XR pose as an absolute world position -- see
     // eyePoseToViewMtx's comment.
-    eyePoseToViewMtx(view->viewMtx, eye.pose, eye.hmdRefPos, eye.eyeAnchor,
-                      kEyePosScale, eye.smoothTurnYawRad);
+    buildEyeViewMtx(view->viewMtx, eye.pose, eye.hmdRefPos, eye.eyeAnchor, eye.smoothTurnYawRad);
     j3dSys.setViewMtx(view->viewMtx);
     // Re-aim replayed models' view-relative lights at this eye (see
     // replay_models_for_current_view()'s comment, 2026-09-29).
@@ -438,6 +583,16 @@ inline aurora::gfx::ResolvedTargets beginEye(const EyeParams& eye) {
     // for this eye only; view->near_ and view->far_ come from the game's
     // normal camera setup and are intentionally reused as-is.
     eyeFovToProjMtx(view->projMtx, eye.fov, view->near_, view->far_);
+    g_overlayViewPending = false;
+    if (g_tvModeActive) {
+        eyePoseToViewMtx(g_overlayViewMtx, eye.pose, eye.hmdRefPos, eye.eyeAnchor, kEyePosScale,
+                         eye.smoothTurnYawRad);
+        std::memcpy(g_overlayProjMtx, view->projMtx, sizeof(Mtx44));
+        g_overlayIsStereo = false;
+        g_overlayViewPending = true;
+        view->projMtx[0][0] *= g_tvZoom;
+        view->projMtx[1][1] *= g_tvZoom;
+    }
 
     // ROOT-CAUSED this session (aggressive VR-edge culling investigation):
     // mDoLib_clipper is the actor-culling frustum tester used throughout
@@ -692,8 +847,8 @@ inline aurora::gfx::ResolvedTargets beginStereoPass(const StereoParams& sp,
     // the pose and the reference position (zero offset), so the camera sits
     // exactly at the anchor with the head's orientation. This is what the
     // whole scene is traversed, culled and recorded against.
-    eyePoseToViewMtx(view->viewMtx, sp.hmdPose, sp.hmdPose.position, sp.eyeAnchor,
-                      kEyePosScale, sp.smoothTurnYawRad);
+    buildEyeViewMtx(view->viewMtx, sp.hmdPose, sp.hmdPose.position, sp.eyeAnchor,
+                    sp.smoothTurnYawRad);
     j3dSys.setViewMtx(view->viewMtx);
     MTXInverse(view->viewMtx, view->invViewMtx);
     // Re-aim replayed models' view-relative lights at the head-centre view
@@ -719,8 +874,8 @@ inline aurora::gfx::ResolvedTargets beginStereoPass(const StereoParams& sp,
     for (int eye = 0; eye < 2; ++eye) {
         Mtx eyeView;
         const int srcEye = kStereoDebugMono ? 0 : eye;
-        eyePoseToViewMtx(eyeView, sp.eyePose[srcEye], sp.hmdPose.position, sp.eyeAnchor,
-                          kEyePosScale, sp.smoothTurnYawRad);
+        buildEyeViewMtx(eyeView, sp.eyePose[srcEye], sp.hmdPose.position, sp.eyeAnchor,
+                        sp.smoothTurnYawRad);
         MTXConcat(eyeView, view->invViewMtx, eyeT[eye]);
         if (kStereoDebugMono) {
             MTXIdentity(eyeT[eye]);
@@ -728,6 +883,27 @@ inline aurora::gfx::ResolvedTargets beginStereoPass(const StereoParams& sp,
 
         Mtx44 eyeProj;
         eyeFovToProjMtx(eyeProj, sp.eyeFov[srcEye], view->near_, view->far_);
+        if (g_tvModeActive) {
+            // Normal (non-TV) per-eye matrices for switchToOverlayView().
+            Mtx normalVc, normalVcInv, normalEyeView;
+            eyePoseToViewMtx(normalVc, sp.hmdPose, sp.hmdPose.position, sp.eyeAnchor,
+                             kEyePosScale, sp.smoothTurnYawRad);
+            MTXInverse(normalVc, normalVcInv);
+            eyePoseToViewMtx(normalEyeView, sp.eyePose[srcEye], sp.hmdPose.position,
+                             sp.eyeAnchor, kEyePosScale, sp.smoothTurnYawRad);
+            MTXConcat(normalEyeView, normalVcInv, g_overlayEyeT[eye]);
+            if (eye == 0) {
+                std::memcpy(g_overlayViewMtx, normalVc, sizeof(Mtx));
+            }
+            g_overlayProjVec[eye][0] = eyeProj[0][0];
+            g_overlayProjVec[eye][1] = eyeProj[0][2];
+            g_overlayProjVec[eye][2] = eyeProj[1][1];
+            g_overlayProjVec[eye][3] = eyeProj[1][2];
+            g_overlayProjVec[eye][4] = eyeProj[2][2];
+            g_overlayProjVec[eye][5] = eyeProj[2][3];
+            eyeProj[0][0] *= g_tvZoom;
+            eyeProj[1][1] *= g_tvZoom;
+        }
         // Same cells GXSetProjection() reads for a perspective matrix.
         projVec[eye][0] = eyeProj[0][0];
         projVec[eye][1] = eyeProj[0][2];
@@ -743,6 +919,12 @@ inline aurora::gfx::ResolvedTargets beginStereoPass(const StereoParams& sp,
     // projection: the union of both eyes' FOVs.
     const XrFovf centerFov = unionFov(sp.eyeFov[0], sp.eyeFov[1]);
     eyeFovToProjMtx(view->projMtx, centerFov, view->near_, view->far_);
+    g_overlayViewPending = false;
+    if (g_tvModeActive) {
+        std::memcpy(g_overlayProjMtx, view->projMtx, sizeof(Mtx44));
+        g_overlayIsStereo = true;
+        g_overlayViewPending = true;
+    }
 
     // Actor-cull frustum: same construction as beginEye() (smallest
     // symmetric frustum containing the asymmetric FOV), over the union FOV
@@ -865,8 +1047,13 @@ inline constexpr float kHudUnitsPerMetre = kEyePosScale;
 // 2026-09-20: pulled ~1ft closer (2.0 -> 1.7) per user request, together
 // with the menu billboard below; widths unchanged, so both panels also
 // subtend a proportionally larger angle now.
-inline constexpr float kHudDistanceMeters = 1.7f;
-inline constexpr float kHudWidthMeters = 1.4f; // bumped up from 1.0f per user feedback
+// 2026-09-29: pulled in to ~3 ft (1.7 -> 0.914 m) so the HUD/text boxes sit
+// in front of nearly everything in the scene -- at 1.7 m, objects closer
+// than the panel were drawn behind it yet appeared nearer in stereo, a
+// depth conflict that caused eye strain. Width scaled by the same ratio so
+// the panel keeps the same apparent (angular) size.
+inline constexpr float kHudDistanceMeters = 0.914f;
+inline constexpr float kHudWidthMeters = 1.4f * (0.914f / 1.7f); // 1.4 m at 1.7 m, same angle
 inline constexpr float kHudHeightMeters = kHudWidthMeters * (448.0f / 608.0f); // matches FB_HEIGHT/FB_WIDTH
 
 // Damping: the panel is still drawn flat-facing-you every frame (its own
@@ -1016,9 +1203,18 @@ inline HudQuadCorners computeBillboardPose(const cXyz& smoothedWorldForward, flo
 }
 
 inline HudQuadCorners computeHudPose() {
-    const float halfW = kHudWidthMeters * 0.5f * kHudUnitsPerMetre;
-    const float halfH = kHudHeightMeters * 0.5f * kHudUnitsPerMetre;
-    const float dist = kHudDistanceMeters * kHudUnitsPerMetre;
+    // game.vrHudDistance and game.vrHudSize (diagonal), both cm, 2026-09-29.
+    // Defaults (93 cm diagonal = 75 cm wide, at 90 cm) keep the angular size
+    // of the original 1.4 m-at-1.7 m panel.
+    const auto& game = dusk::getSettings().game;
+    const float distM = game.vrHudDistance.getValue() / 100.f;
+    constexpr float kHudAspect = 448.0f / 608.0f;  // height / width
+    const float widthM =
+        (game.vrHudSize.getValue() / 100.f) / std::sqrt(1.f + kHudAspect * kHudAspect);
+    const float heightM = widthM * kHudAspect;
+    const float halfW = widthM * 0.5f * kHudUnitsPerMetre;
+    const float halfH = heightM * 0.5f * kHudUnitsPerMetre;
+    const float dist = distM * kHudUnitsPerMetre;
     return computeBillboardPose(g_hudSmoothedWorldForward, dist, halfW, halfH);
 }
 
@@ -1575,6 +1771,108 @@ inline void drawAimCrosshair(const cXyz& worldPos) {
 //   vr_render::HandPayload payload{ controllerPose };
 //   aurora::gfx::push_custom_draw(state.typeId, &payload, sizeof(payload));
 // ---------------------------------------------------------------------------
+
+// Cutscene crop (2026-09-29, game.vrCutsceneCrop): blacks out everything
+// outside the original cutscene camera's frame. Drawn as a world-space box
+// around the cutscene camera eye with a rectangular hole in the front face
+// matching that camera's field of view and aspect -- world-locked, so the
+// shot stays put like a screen and looking away shows black instead of
+// things the scene wasn't framed to show. Depth test off, drawn after the
+// scene (the HUD is a separate OpenXR layer, unaffected). The box is much
+// larger than the positional-tracking lean radius, so the eye always stays
+// inside it.
+// See g_overlayViewPending. No-op unless TV mode stashed matrices this pass.
+inline void switchToOverlayView() {
+    if (!g_overlayViewPending) return;
+    g_overlayViewPending = false;
+    view_class* view = dComIfGd_getView();
+    if (view == nullptr) return;
+    std::memcpy(view->viewMtx, g_overlayViewMtx, sizeof(Mtx));
+    MTXInverse(view->viewMtx, view->invViewMtx);
+    j3dSys.setViewMtx(view->viewMtx);
+    std::memcpy(view->projMtx, g_overlayProjMtx, sizeof(Mtx44));
+    GXSetProjection(view->projMtx, GX_PERSPECTIVE);
+    if (g_overlayIsStereo) {
+        GXSetStereo(GX_TRUE, g_overlayProjVec[0], g_overlayProjVec[1], &g_overlayEyeT[0][0][0],
+                    &g_overlayEyeT[1][0][0]);
+    }
+}
+
+struct CutsceneFrame {
+    cXyz eye;
+    cXyz center;
+    float fovyDeg = 60.f;
+    float aspect = 16.f / 9.f;
+    float distance = 500.f;  // front face distance, game units (TV: game.vrTvDistance)
+};
+
+inline void drawCutsceneFrame(const CutsceneFrame& frame) {
+    view_class* view = dComIfGd_getView();
+    if (view == nullptr) return;
+
+    cXyz fwd = frame.center - frame.eye;
+    if (fwd.abs() < 0.001f) return;
+    fwd = fwd.normZP();
+    cXyz worldUp(0.f, 1.f, 0.f);
+    cXyz right = worldUp.outprod(fwd);  // x = up x forward (game is +Z forward, +X right-hand here)
+    if (right.abs() < 0.001f) return;
+    right = right.normZP();
+    cXyz up = fwd.outprod(right);
+
+    const float kD = std::max(frame.distance, 100.f);  // front face (units); >> 75-unit lean radius
+    const float halfFovy = std::clamp(frame.fovyDeg, 5.f, 150.f) * 0.5f * (3.14159265f / 180.f);
+    const float h = kD * std::tan(halfFovy);
+    const float w = h * std::clamp(frame.aspect, 0.5f, 3.f);
+    const float B = std::max(w, h) + kD;
+
+    auto toView = [&](float x, float y, float z, cXyz& out) {
+        const cXyz world = frame.eye + right * x + up * y + fwd * z;
+        mDoMtx_multVec(view->viewMtx, &world, &out);
+    };
+
+    GXSetProjection(view->projMtx, GX_PERSPECTIVE);
+    GXLoadPosMtxImm(cMtx_getIdentity(), GX_PNMTX0);
+    GXSetCurrentMtx(0);
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetNumChans(1);
+    GXSetChanCtrl(GX_COLOR0, GX_DISABLE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_CLAMP, GX_AF_NONE);
+    GXSetNumTexGens(0);
+    GXSetNumTevStages(1);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+    GXSetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
+    GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_SET);
+    GXSetZMode(GX_DISABLE, GX_ALWAYS, GX_FALSE);
+    GXSetCullMode(GX_CULL_NONE);
+    GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_OR, GX_ALWAYS, 0);
+
+    // Quads in camera-local (right, up, forward) coordinates: the front face
+    // (z = kD) minus the [-w,w] x [-h,h] window, plus the other five faces.
+    const float quads[9][4][3] = {
+        {{-B, h, kD}, {B, h, kD}, {B, B, kD}, {-B, B, kD}},       // front, above window
+        {{-B, -B, kD}, {B, -B, kD}, {B, -h, kD}, {-B, -h, kD}},   // front, below
+        {{-B, -h, kD}, {-w, -h, kD}, {-w, h, kD}, {-B, h, kD}},   // front, left
+        {{w, -h, kD}, {B, -h, kD}, {B, h, kD}, {w, h, kD}},       // front, right
+        {{-B, -B, -B}, {B, -B, -B}, {B, B, -B}, {-B, B, -B}},     // back
+        {{-B, -B, -B}, {-B, B, -B}, {-B, B, kD}, {-B, -B, kD}},   // left side
+        {{B, -B, -B}, {B, -B, kD}, {B, B, kD}, {B, B, -B}},       // right side
+        {{-B, B, -B}, {B, B, -B}, {B, B, kD}, {-B, B, kD}},       // top
+        {{-B, -B, -B}, {-B, -B, kD}, {B, -B, kD}, {B, -B, -B}},   // bottom
+    };
+    GXBegin(GX_QUADS, GX_VTXFMT0, 9 * 4);
+    for (const auto& q : quads) {
+        for (const auto& v : q) {
+            cXyz p;
+            toView(v[0], v[1], v[2], p);
+            GXPosition3f32(p.x, p.y, p.z);
+            GXColor4u8(0, 0, 0, 255);
+        }
+    }
+    GXEnd();
+}
 
 struct HandPayload {
     XrPosef controllerPose;   // grip space pose from xrLocateSpaces

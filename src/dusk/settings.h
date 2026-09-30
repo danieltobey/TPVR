@@ -80,6 +80,13 @@ enum class VrLightingMode : u8 {
     FollowLook = 2,  // from above and behind your smoothed look direction
 };
 
+// VR cutscene presentation (game.vrCutsceneView).
+enum class VrCutsceneView : u8 {
+    Full = 0,    // no crop: the whole scene around the cutscene camera
+    Window = 1,  // crop to the original frame, world-locked (like a window)
+    Tv = 2,      // original framing on a stereo screen locked to the head
+};
+
 enum class TouchTargeting : u8 {
     Hybrid = 0,
     Hold = 1,
@@ -160,6 +167,12 @@ template <>
 struct ConfigEnumRange<VrLightingMode> {
     static constexpr auto min = VrLightingMode::Original;
     static constexpr auto max = VrLightingMode::FollowLook;
+};
+
+template <>
+struct ConfigEnumRange<VrCutsceneView> {
+    static constexpr auto min = VrCutsceneView::Full;
+    static constexpr auto max = VrCutsceneView::Tv;
 };
 
 template <>
@@ -551,30 +564,34 @@ struct UserSettings {
         //    no facing-relative neck nudge, no one-tick-ahead extrapolation,
         //    and swimming/crawling/vines/dialogue use position + smoothed
         //    height instead of the animated head (vr_link_visibility.hpp).
-        //  vrSmoothStartStop: move at the plain speed ramp instead of the
-        //    footstep-synced speed (daAlink_c::posMove()).
-        //  vrInstantStartFacing: face the push direction immediately when
-        //    starting from a standstill (daAlink_c::checkNextAction()).
+        //  vrMovementEnhancements: move at the plain speed ramp instead of the
+        //    footstep-synced speed (daAlink_c::posMove()), and face the push
+        //    direction immediately when starting from a standstill
+        //    (daAlink_c::checkNextAction()). First person only.
         ConfigVar<bool> vrStableCamera;
-        ConfigVar<bool> vrSmoothStartStop;
-        ConfigVar<bool> vrInstantStartFacing;
+        ConfigVar<bool> vrMovementEnhancements;
         ConfigVar<VrLightingMode> vrLightingMode;
-        // Base game's sun-glare darkening (d_kankyo_rain.cpp): dims the whole
-        // scene by how centred and unoccluded the sun is in the FLATSCREEN
-        // camera's view. Default off in VR -- it tracks an invisible camera
-        // and pumps scene brightness when walking in/out of cover.
-        ConfigVar<bool> vrSunGlareDimming;
         // Snap the view's yaw to the game camera at the start of each event/
         // cutscene and on every camera cut, and to Link's facing when it ends
         // (vr_main.cpp's cutscene jump-cut block). Default on.
         ConfigVar<bool> vrCutsceneFaceCamera;
-        // Re-light static lit models (signs, props) per VR view too, not just
-        // animated ones (dusk::interp::material::has_recorded_light_view()).
-        // Default on; off trades lighting accuracy for CPU time.
-        ConfigVar<bool> vrAccurateObjectLighting;
         // While riding Epona, rotate the view by the horse's own turning so
         // the look direction relative to the horse is kept (vr_main.cpp).
         ConfigVar<bool> vrHorseTurnView;
+        // Z-target lock-on: snap the view to face the target, then follow its
+        // bearing while the lock is held (vr_main.cpp). First person only.
+        ConfigVar<bool> vrZTargetLockView;
+        // Within a cutscene shot, turn the view with the cutscene camera's own
+        // pans (not just on cuts). Requires vrCutsceneFaceCamera.
+        ConfigVar<bool> vrCutsceneFollowTurns;
+        // How cutscenes are presented: full view, cropped window, or TV.
+        ConfigVar<VrCutsceneView> vrCutsceneView;
+        // Placement/size of the HUD billboard and the cutscene TV, in cm:
+        // distance from the eye, and size measured diagonally like a screen.
+        ConfigVar<int> vrHudDistance;
+        ConfigVar<int> vrHudSize;
+        ConfigVar<int> vrTvSize;
+        ConfigVar<int> vrTvDistance;
 
         // Audio
         ConfigVar<bool> noLowHpSound;

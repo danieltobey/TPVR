@@ -99,6 +99,12 @@ constexpr std::array kVrLightingModeLabels = {
     "Follow Look",
 };
 
+constexpr std::array kVrCutsceneViewLabels = {
+    "Full",
+    "Window",
+    "TV",
+};
+
 constexpr std::array kTouchTargetingLabels = {
     "Hybrid",
     "Hold",
@@ -938,58 +944,222 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
         auto& leftPane = add_child<Pane>(content, Pane::Type::Controlled);
         auto& rightPane = add_child<Pane>(content, Pane::Type::Uncontrolled);
 
-#if !VR_SETTINGS_STANDALONE
-        // Standalone (Quest) has no desktop window to mirror to. The setting itself stays
-        // registered and defaults ON there -- the mirror path also drives the Dusklight overlay's
-        // scaling -- it's just not user-facing.
-        leftPane.add_section("Display");
-        config_bool_select(leftPane, rightPane, getSettings().game.vrDesktopMirror,
-            {
-                .key = "VR Desktop Mirror",
-                .helpText = "While playing in VR, show one eye's view in the game window "
-                            "instead of leaving it blank. Reuses the game's existing present "
-                            "pass, so this has no meaningful performance cost."
-            });
-#endif
+        // Reorganised 2026-09-29: grouped by what the player is doing (view,
+        // moving, cutscenes, HUD, lighting, combat, performance); every
+        // description is at most two sentences and states the default.
 
-        leftPane.add_section("Comfort");
+        leftPane.add_section("View");
+        // Perspective is one either/or choice over game.vrThirdPerson.
+        leftPane.register_control(
+            leftPane.add_select_button({
+                .key = "Perspective",
+                .getValue =
+                    [] {
+                        return getSettings().game.vrThirdPerson.getValue() ? "Third Person"
+                                                                           : "First Person";
+                    },
+                .isModified =
+                    [] {
+                        return getSettings().game.vrThirdPerson.getValue() !=
+                               getSettings().game.vrThirdPerson.getDefaultValue();
+                    },
+            }),
+            rightPane, [](Pane& pane) {
+                constexpr std::array kPerspectives = {"First Person", "Third Person"};
+                for (int i = 0; i < 2; i++) {
+                    pane.add_button({
+                            .text = kPerspectives[i],
+                            .isSelected =
+                                [i] { return getSettings().game.vrThirdPerson.getValue() == (i == 1); },
+                        })
+                        .on_pressed([i] {
+                            mDoAud_seStartMenu(kSoundItemChange);
+                            getSettings().game.vrThirdPerson.setValue(i == 1);
+                            config::save();
+                        });
+                }
+                pane.add_rml(
+                    "<br/>Play in first or third person. Default: First Person."
+                    "<br/><br/><b>First Person:</b> a first-person camera, seeing through Link's "
+                    "eyes."
+                    "<br/><b>Third Person:</b> the game's original third-person camera behind "
+                    "Link.");
+            });
+        // Shown inverted over game.vrStableCamera: on = the original camera
+        // that follows Link's animations, off (default) = steady camera.
+        {
+            auto& button = leftPane.add_child<BoolButton>(BoolButton::Props{
+                .key = "Camera Follows Animations",
+                .getValue = [] { return !getSettings().game.vrStableCamera.getValue(); },
+                .setValue =
+                    [](bool value) {
+                        if (value == !getSettings().game.vrStableCamera.getValue()) {
+                            return;
+                        }
+                        getSettings().game.vrStableCamera.setValue(!value);
+                        config::save();
+                    },
+                .isDisabled = [] { return getSettings().game.vrThirdPerson.getValue(); },
+                .isModified =
+                    [] {
+                        return getSettings().game.vrStableCamera.getValue() !=
+                               getSettings().game.vrStableCamera.getDefaultValue();
+                    },
+            });
+            leftPane.register_control(button, rightPane, [](Pane& pane) {
+                pane.clear();
+                pane.add_rml("In first person, lets your view sway with Link's running, turning and "
+                             "idle animations, as in the original game. Off by default, which keeps "
+                             "the camera steady.");
+            });
+        }
         config_bool_select(leftPane, rightPane, getSettings().game.vrPositionalTracking,
             {
                 .key = "Positional Tracking",
-                .helpText = "Lets leaning, ducking, or side-stepping with your real head "
-                            "move the VR camera to match, on top of the normal head-turning "
-                            "tracking. Only offsets the camera view -- Link's actual position "
-                            "and collision stay where the game puts him, so leaning far enough "
-                            "can let you see through thin geometry. The maximum lean distance "
-                            "is tunable in Debug > Graphics Settings. On by default."
+                .helpText = "Lets you lean, duck and side-step to move your view without moving "
+                            "Link, though leaning far can reveal the other side of thin walls. On "
+                            "by default."
+            });
+        // "Attach Body Rotation to Headset" (game.vrAttachBodyRotationToHead) is
+        // intentionally not exposed here -- still a real ConfigVar, editable
+        // directly in the config file, but now DEFAULTS TO FALSE (disabled).
+        // The underlying feature has a long history of movement-lockup bugs
+        // (rounds 1-10 in vr-mod-notes, "body ends up in front of me on
+        // rotation" -- never fully root-caused) culminating in a real "stuck,
+        // can't move" report even after the UI toggle to turn it off was
+        // removed from this screen; the code path itself was still forcing
+        // shape_angle.y to the headset's yaw regardless. Disabled at the
+        // ConfigVar default 2026-09-19 rather than left silently on. Do not
+        // re-enable without new evidence the underlying bug is actually fixed.
+        config_bool_select(leftPane, rightPane, getSettings().game.vrShowBody,
+            {
+                .key = "Show Link's Body (Experimental)",
+                .helpText = "In first person, shows Link's body along with his stowed sword and "
+                            "shield (your hands and held items are always visible). Off by default.",
+                .isDisabled = [] { return getSettings().game.vrThirdPerson.getValue(); },
             });
 
-        config_bool_select(leftPane, rightPane, getSettings().game.vrStableCamera,
+        leftPane.add_section("Movement & Turning");
+        config_bool_select(leftPane, rightPane, getSettings().game.vrMovementEnhancements,
             {
-                .key = "Stable First-Person Camera",
-                .helpText = "Anchors the first-person camera to Link's actual position only, "
-                            "so his running, turning and idle animations don't move your view. "
-                            "Also applies while swimming, crawling, climbing vines and talking "
-                            "(height eases between stances instead of bobbing). Off restores "
-                            "the original camera, which leans forward along Link's body while "
-                            "running. On by default."
+                .key = "Smooth Movement",
+                .helpText = "In first person, Link speeds up and slows down smoothly, and turns "
+                            "straight to the direction you push when you start moving. On by "
+                            "default.",
+                .isDisabled = [] { return getSettings().game.vrThirdPerson.getValue(); },
             });
-        config_bool_select(leftPane, rightPane, getSettings().game.vrSmoothStartStop,
+        config_bool_select(leftPane, rightPane, getSettings().game.vrSnapTurn,
             {
-                .key = "Smooth Start/Stop",
-                .helpText = "Speeds Link up and slows him down at an even rate. The original "
-                            "game syncs his speed to his footsteps when starting and stopping, "
-                            "which in first person feels like a stutter. Off restores the "
-                            "original footstep-synced movement. On by default."
+                .key = "Snap Turn",
+                .helpText = "Turns you in fixed steps with each flick of the right stick instead "
+                            "of turning smoothly, which many people find more comfortable. Off by "
+                            "default."
             });
-        config_bool_select(leftPane, rightPane, getSettings().game.vrInstantStartFacing,
+        config_int_select(leftPane, rightPane, getSettings().game.vrSmoothTurnSpeed,
+            "Smooth Turn Speed",
+            "How quickly the right stick turns you when Snap Turn is off. Default: 135 deg/s.",
+            30, 360, 15,
+            [] { return getSettings().game.vrSnapTurn.getValue(); }, {}, " deg/s");
+        config_int_select(leftPane, rightPane, getSettings().game.vrSnapTurnAngle,
+            "Snap Turn Angle",
+            "How far each snap turns you when Snap Turn is on. Default: 45 deg.",
+            15, 90, 15,
+            [] { return !getSettings().game.vrSnapTurn.getValue(); }, {}, " deg");
+        config_bool_select(leftPane, rightPane, getSettings().game.vrHorseTurnView,
             {
-                .key = "Instant Start Facing",
-                .helpText = "When you start moving from a standstill, Link immediately faces "
-                            "the direction you push, instead of turning on the spot or curving "
-                            "round from wherever he was last facing. Off restores the original "
-                            "turn. On by default."
+                .key = "Turn View With Horse",
+                .helpText = "Turns your view smoothly along with Epona, so you keep looking the "
+                            "same way relative to her. On by default."
             });
+        config_bool_select(leftPane, rightPane, getSettings().game.vrZTargetLockView,
+            {
+                .key = "Z-Target Lock View",
+                .helpText = "Z-targeting snaps your view to face the target and keeps it in place "
+                            "as you strafe, while your head stays free to look around. On by default."
+            });
+
+        leftPane.add_section("Cutscenes");
+        leftPane.register_control(
+            leftPane.add_select_button({
+                .key = "Cutscene View",
+                .getValue =
+                    [] {
+                        return kVrCutsceneViewLabels[static_cast<u8>(
+                            getSettings().game.vrCutsceneView.getValue())];
+                    },
+                .isModified =
+                    [] {
+                        return getSettings().game.vrCutsceneView.getValue() !=
+                               getSettings().game.vrCutsceneView.getDefaultValue();
+                    },
+            }),
+            rightPane, [](Pane& pane) {
+                for (int i = 0; i < static_cast<int>(kVrCutsceneViewLabels.size()); i++) {
+                    pane.add_button({
+                            .text = kVrCutsceneViewLabels[i],
+                            .isSelected =
+                                [i] {
+                                    return getSettings().game.vrCutsceneView.getValue() ==
+                                           static_cast<VrCutsceneView>(i);
+                                },
+                        })
+                        .on_pressed([i] {
+                            mDoAud_seStartMenu(kSoundItemChange);
+                            getSettings().game.vrCutsceneView.setValue(static_cast<VrCutsceneView>(i));
+                            config::save();
+                        });
+                }
+                pane.add_rml(
+                    "<br/>How much of the scene you see during cutscenes. Default: Window."
+                    "<br/><br/><b>Full:</b> everything around the cutscene camera."
+                    "<br/><b>Window:</b> only what the original camera showed, fixed in place "
+                    "in the scene."
+                    "<br/><b>TV:</b> the original shot in 3D, on a floating screen in front of "
+                    "you.");
+            });
+        config_int_select(leftPane, rightPane, getSettings().game.vrTvSize,
+            "TV Size",
+            "The screen's size in TV mode, measured diagonally. Default: 760 cm.",
+            100, 2400, 20,
+            [] { return getSettings().game.vrCutsceneView.getValue() != VrCutsceneView::Tv; },
+            {}, " cm");
+        config_int_select(leftPane, rightPane, getSettings().game.vrTvDistance,
+            "TV Distance",
+            "How far away the TV screen is (the scene inside keeps its own depth). "
+            "Default: 500 cm.",
+            100, 1000, 50,
+            [] { return getSettings().game.vrCutsceneView.getValue() != VrCutsceneView::Tv; },
+            {}, " cm");
+        config_bool_select(leftPane, rightPane, getSettings().game.vrCutsceneFaceCamera,
+            {
+                .key = "Face Cutscene Camera",
+                .helpText = "Turns you toward the cutscene camera at the start of each shot, and "
+                            "back toward Link's facing when the cutscene ends. On by default."
+            });
+        config_bool_select(leftPane, rightPane, getSettings().game.vrCutsceneFollowTurns,
+            {
+                .key = "Follow Cutscene Camera Turns",
+                .helpText = "Also turns your view with the cutscene camera as it pans within a "
+                            "shot (requires Face Cutscene Camera). On by default.",
+                .isDisabled = [] { return !getSettings().game.vrCutsceneFaceCamera.getValue(); },
+            });
+        config_bool_select(leftPane, rightPane, getSettings().game.vrExperimentalCutsceneFirstPerson,
+            {
+                .key = "First-Person Cutscenes (Experimental)",
+                .helpText = "Shows cutscenes through Link's eyes instead of from the cutscene "
+                            "camera, although many shots weren't designed for this. Off by default."
+            });
+
+        leftPane.add_section("HUD");
+        config_int_select(leftPane, rightPane, getSettings().game.vrHudDistance,
+            "HUD Distance",
+            "How far away the HUD and text boxes are; closer keeps them in front of nearby "
+            "objects. Default: 90 cm.",
+            50, 300, 10, {}, {}, " cm");
+        config_int_select(leftPane, rightPane, getSettings().game.vrHudSize,
+            "HUD Size",
+            "The size of the HUD and text boxes, measured diagonally. Default: 93 cm.",
+            20, 400, 5, {}, {}, " cm");
 
         leftPane.add_section("Lighting");
         leftPane.register_control(
@@ -1023,174 +1193,65 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                         });
                 }
                 pane.add_rml(
-                    "<br/>Where the main light on characters and objects comes from outdoors. "
-                    "The original game attaches it to the camera, which in VR is an invisible "
-                    "camera swinging around behind Link, so the scene relights as you move."
-                    "<br/><br/><b>Original:</b> the game's camera-attached light."
-                    "<br/><b>Sun/Moon:</b> from the sun by day and the moon by night. Fixed in "
-                    "the world; only changes with time of day. (Default)"
-                    "<br/><b>Follow Look:</b> from above and behind where you're looking, "
-                    "following your head with about a one-second delay.");
-            });
-        config_bool_select(leftPane, rightPane, getSettings().game.vrAccurateObjectLighting,
-            {
-                .key = "Accurate Object Lighting",
-                .helpText = "Lights signs, fences, crates and other still objects from your "
-                            "own view. Off, they keep lighting meant for the flatscreen camera, "
-                            "which shifts as you move around them, but it saves some processor "
-                            "time in busy areas. On by default."
-            });
-        config_bool_select(leftPane, rightPane, getSettings().game.vrSunGlareDimming,
-            {
-                .key = "Sun Glare Dimming",
-                .helpText = "The original game darkens the whole scene when the sun is near "
-                            "the middle of the view and not blocked, imitating your eyes "
-                            "adjusting to glare. In VR it's based on an invisible camera rather "
-                            "than where you're looking, so walking under a tree or roof makes "
-                            "everything brighten and dim. The lens flare is unaffected. Off by "
-                            "default."
-            });
-
-        leftPane.add_section("Turning");
-        config_bool_select(leftPane, rightPane, getSettings().game.vrHorseTurnView,
-            {
-                .key = "Turn View With Horse",
-                .helpText = "While riding, your view turns along with Epona, so wherever you're "
-                            "looking relative to the horse stays the same as she turns. Steering "
-                            "stays relative to where you look. On by default."
-            });
-        config_bool_select(leftPane, rightPane, getSettings().game.vrCutsceneFaceCamera,
-            {
-                .key = "Face Cutscene Camera",
-                .helpText = "At the start of a cutscene and every time it cuts to a new shot, "
-                            "turns your view to face the way the cutscene camera points, no "
-                            "matter how you'd turned in-game. When the cutscene ends, turns "
-                            "you to face the way Link faces. Smooth camera pans inside a shot "
-                            "are never followed, so the view never slides on its own. On by "
-                            "default."
-            });
-        config_bool_select(leftPane, rightPane, getSettings().game.vrSnapTurn,
-            {
-                .key = "Snap Turn",
-                .helpText = "Off: pushing the right stick (or a gamepad's C-stick) left/right "
-                            "turns your view smoothly at the Smooth Turn Speed below. On: each "
-                            "flick of the stick instantly rotates the view by the Snap Turn "
-                            "Angle instead -- easier on the stomach for many people, since the "
-                            "view never slides. Return the stick to center between snaps. Off "
-                            "by default."
-            });
-        config_int_select(leftPane, rightPane, getSettings().game.vrSmoothTurnSpeed,
-            "Smooth Turn Speed",
-            "How fast the view rotates, in degrees per second, with the right stick pushed "
-            "all the way over. Only used while Snap Turn is off.",
-            30, 360, 15,
-            [] { return getSettings().game.vrSnapTurn.getValue(); }, {}, " deg/s");
-        config_int_select(leftPane, rightPane, getSettings().game.vrSnapTurnAngle,
-            "Snap Turn Angle",
-            "How many degrees each snap rotates the view. Only used while Snap Turn is on.",
-            15, 90, 15,
-            [] { return !getSettings().game.vrSnapTurn.getValue(); }, {}, " deg");
-
-        leftPane.add_section("Appearance");
-        config_bool_select(leftPane, rightPane, getSettings().game.vrThirdPerson,
-            {
-                .key = "Third Person",
-                .helpText = "Plays the entire game in third person while in VR, the same "
-                            "camera Wolf Link and cutscenes already use -- your headset "
-                            "still looks around freely, just from behind Link instead of "
-                            "through his eyes. Also shows his body (overriding \"Experimental: "
-                            "Show Link's Body\" below if it's off), since there's no point "
-                            "being in third person with an invisible avatar. Off by default."
-            });
-        // "Attach Body Rotation to Headset" (game.vrAttachBodyRotationToHead) is
-        // intentionally not exposed here -- still a real ConfigVar, editable
-        // directly in the config file, but now DEFAULTS TO FALSE (disabled).
-        // The underlying feature has a long history of movement-lockup bugs
-        // (rounds 1-10 in vr-mod-notes, "body ends up in front of me on
-        // rotation" -- never fully root-caused) culminating in a real "stuck,
-        // can't move" report even after the UI toggle to turn it off was
-        // removed from this screen; the code path itself was still forcing
-        // shape_angle.y to the headset's yaw regardless. Disabled at the
-        // ConfigVar default 2026-09-19 rather than left silently on. Do not
-        // re-enable without new evidence the underlying bug is actually fixed.
-        config_bool_select(leftPane, rightPane, getSettings().game.vrShowBody,
-            {
-                .key = "Experimental: Show Link's Body",
-                .helpText = "Shows Link's whole body in VR, in any outfit or armor, along "
-                            "with the sword and shield while they're stowed on his back. "
-                            "Your tracked hands and anything actively held (sword drawn, "
-                            "shield raised, other items) show normally either way. Off by "
-                            "default (body hidden) since this is experimental; turn this on "
-                            "if you'd like to see your own body. Has no effect while \"Third "
-                            "Person\" above is on, which always shows the body."
-            });
-        config_bool_select(leftPane, rightPane, getSettings().game.vrExperimentalCutsceneFirstPerson,
-            {
-                .key = "EXPERIMENTAL: Cutscenes First-Person",
-                .helpText = "By default, scripted cutscenes play in third person while "
-                            "you're otherwise in first-person VR (dialogue and door/"
-                            "loading transitions are unaffected and always stay first "
-                            "person). Turn this on to force first person during cutscenes "
-                            "too, whenever Link's own body is actually the thing drawn in "
-                            "the shot. EXPERIMENTAL: many cutscene cameras were never "
-                            "authored to be viewed this way and can put your view somewhere "
-                            "the shot wasn't designed for. Off by default."
+                    "<br/>Where the main outdoor light on characters and objects comes from. "
+                    "Default: Sun/Moon."
+                    "<br/><br/><b>Original:</b> attached to the game's hidden camera, so it "
+                    "shifts as you move."
+                    "<br/><b>Sun/Moon:</b> the sun by day and the moon by night, fixed in the "
+                    "world."
+                    "<br/><b>Follow Look:</b> above and behind where you're looking, following "
+                    "your head with a slight delay.");
             });
 
         leftPane.add_section("Combat");
         config_bool_select(leftPane, rightPane, getSettings().game.vrSwapSwordShieldHands,
             {
                 .key = "Swap Sword/Shield Hands",
-                .helpText = "Draws the sword in your right hand and the shield in your left "
-                            "(the base game always has Link hold the sword in his left hand). "
-                            "Also swaps which hand's swing/thrust gesture triggers a sword "
-                            "attack vs. a shield bash, so the hand actually holding each item "
-                            "is the one that uses it. Off by default."
+                .helpText = "Puts the sword in your right hand and the shield in your left, and "
+                            "swaps which hand attacks and which bashes. Off by default."
             });
         config_bool_select(leftPane, rightPane, getSettings().game.vrPhysicalSword,
             {
                 .key = "Physical Sword",
-                .helpText = "Swinging your sword hand no longer presses the attack button. "
-                            "Instead the sword itself deals damage: while you swing it fast, "
-                            "its blade is a live hitbox that hurts whatever it touches, until "
-                            "the swing slows down. Link doesn't play an attack animation. "
-                            "The real attack button still works normally. Off by default."
+                .helpText = "Your blade deals damage directly when you swing it fast, instead of "
+                            "swings triggering attack animations. On by default."
             });
 
         leftPane.add_section("Performance");
         config_bool_select(leftPane, rightPane, getSettings().game.vrSinglePassStereo,
             {
                 .key = "Single-Pass Stereo",
-                .helpText = "Draws both eyes in one rendering pass instead of two. Roughly halves "
-                            "the CPU work per frame, which is what the standalone headset needs to "
-                            "hold a steady framerate. On by default; turn off if you see anything wrong in one eye."
+                .helpText = "Renders both eyes in a single pass, roughly halving the processor "
+                            "work per frame. On by default; turn it off if one eye looks wrong."
             });
         config_percent_select(leftPane, rightPane, getSettings().game.vrRenderScale,
             "VR Render Resolution",
-            "Renders each eye at this fraction of the headset's recommended resolution; "
-            "the headset scales it back up. Lowering it is the most direct way to get "
-            "more GPU headroom on the standalone headset -- 90% cuts the pixel count "
-            "by a fifth. Takes effect the next time the game starts.",
-            50, 100, 5);
+            "Each eye's resolution as a percentage of the headset's recommended size, including "
+            "supersampling above 100% (the Video tab's resolution doesn't affect VR). Applies "
+            "after a restart; default: 100%.",
+            50, 200, 5);
 
 #if !VR_SETTINGS_STANDALONE
-        // Standalone renders through the native Quest runtime -- no SteamVR / Virtual Desktop /
-        // Meta Link compositor in the loop, and its gamma is already correct, so neither
-        // compensation slider applies there.
-        leftPane.add_section("Brightness");
+        // Standalone (Quest) has no desktop window to mirror to, and renders
+        // through the native Quest runtime -- no SteamVR / Virtual Desktop /
+        // Meta Link compositor, and its gamma is already correct -- so none of
+        // these apply there. The mirror setting stays registered and defaults
+        // ON (it also drives the Dusklight overlay's scaling).
+        leftPane.add_section("PC Display");
+        config_bool_select(leftPane, rightPane, getSettings().game.vrDesktopMirror,
+            {
+                .key = "VR Desktop Mirror",
+                .helpText = "Shows one eye's view in the game window instead of leaving it "
+                            "blank, at no real performance cost. On by default."
+            });
         config_percent_select(leftPane, rightPane, getSettings().game.vrGammaCompensation,
             "VR Brightness Compensation",
-            "Corrects how bright the game looks inside the headset on most VR runtimes "
-            "(Virtual Desktop, Meta Link, etc.) compared to the desktop window. Lower "
-            "values brighten the image, higher values darken it. Raise this if VR looks "
-            "washed out; lower it if VR looks too dark. Has no effect on the desktop "
-            "window or on SteamVR.",
+            "Corrects headset brightness on most PC VR runtimes other than SteamVR; lower "
+            "values brighten and higher values darken. Default: 100%.",
             30, 300, 5);
         config_percent_select(leftPane, rightPane, getSettings().game.vrGammaCompensationSteamVr,
             "VR Brightness Compensation (SteamVR)",
-            "The same correction as above, but tuned separately for SteamVR -- its "
-            "compositor handles color differently than other VR runtimes. Only applies "
-            "while running through SteamVR.",
+            "The same correction, tuned separately for SteamVR. Default: 100%.",
             30, 220, 5);
 #endif
     });

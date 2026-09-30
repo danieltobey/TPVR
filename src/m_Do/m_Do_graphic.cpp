@@ -3116,6 +3116,7 @@ int mDoGph_Painter() {
     if (!dusk::vr::isRenderingToHeadset()) {
         mDoGph_drawHud2D();
     } else {
+        dusk::vr::drawCutsceneFrameIfActive();
         dusk::vr::drawHudBillboard(mDoGph_gInf_c::getHudBillboardTexObj());
     }
 

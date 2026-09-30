@@ -16,6 +16,9 @@
 #include "m_Do/m_Do_controller_pad.h"
 #include "SSystem/SComponent/c_math.h"
 #include "Z2AudioLib/Z2Instances.h"
+#if TARGET_PC
+#include "dusk/vr/vr_main.hpp"
+#endif
 #include "JSystem/JAudio2/JAUSectionHeap.h"
 #include <cmath>
 #include <cstring>
@@ -1534,6 +1537,29 @@ void daHorse_c::setStickData() {
 
                     stick_angle = mDoCPd_c::getStickAngle3D(PAD_1);
                     m_padStickAngleY = (dCam_getControledAngleY(dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0))) + 0x10000 + stick_angle) - 0x8000;
+#if TARGET_PC
+                    // VR steering deadzone (2026-09-29, user report: horse
+                    // turning "quite sensitive to joystick input"): small
+                    // deviations from the horse's own facing steer straight,
+                    // and beyond the deadzone the angle ramps up from zero
+                    // (remapped, not a hard cut-off, so a turn never kicks
+                    // in abruptly at the threshold).
+                    if (dusk::vr::isRenderingToHeadset()) {
+                        constexpr f32 kVrHorseSteerDeadzoneDeg = 20.0f;
+                        const s16 rel = (s16)(m_padStickAngleY - shape_angle.y);
+                        const f32 relDeg = rel * (180.0f / 32768.0f);
+                        const f32 mag = fabsf(relDeg);
+                        f32 outDeg = 0.0f;
+                        if (mag > kVrHorseSteerDeadzoneDeg) {
+                            outDeg = (mag - kVrHorseSteerDeadzoneDeg) *
+                                     (180.0f / (180.0f - kVrHorseSteerDeadzoneDeg));
+                            if (relDeg < 0.0f) {
+                                outDeg = -outDeg;
+                            }
+                        }
+                        m_padStickAngleY = shape_angle.y + (s16)(outDeg * (32768.0f / 180.0f));
+                    }
+#endif
                     return;
                 }
             }

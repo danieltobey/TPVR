@@ -395,6 +395,7 @@ nlohmann::json ConfigImpl<ui::ControlLayout>::dumpToJson(const ConfigVar<ui::Con
 template class ConfigImpl<FrameInterpMode>;
 template class ConfigImpl<TouchTargeting>;
 template class ConfigImpl<VrLightingMode>;
+template class ConfigImpl<VrCutsceneView>;
 template class ConfigImpl<MenuScaling>;
 template class ConfigImpl<Resampler>;
 template class ConfigImpl<AlwaysGreatspinMode>;

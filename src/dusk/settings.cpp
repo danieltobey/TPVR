@@ -164,13 +164,17 @@ UserSettings g_userSettings = {
         .vrSnapTurn {"game.vrSnapTurn", false},
         .vrSnapTurnAngle {"game.vrSnapTurnAngle", 45},
         .vrStableCamera {"game.vrStableCamera", true},
-        .vrSmoothStartStop {"game.vrSmoothStartStop", true},
-        .vrInstantStartFacing {"game.vrInstantStartFacing", true},
+        .vrMovementEnhancements {"game.vrMovementEnhancements", true},
         .vrLightingMode {"game.vrLightingMode", VrLightingMode::SunMoon},
-        .vrSunGlareDimming {"game.vrSunGlareDimming", false},
         .vrCutsceneFaceCamera {"game.vrCutsceneFaceCamera", true},
-        .vrAccurateObjectLighting {"game.vrAccurateObjectLighting", true},
         .vrHorseTurnView {"game.vrHorseTurnView", true},
+        .vrZTargetLockView {"game.vrZTargetLockView", true},
+        .vrCutsceneFollowTurns {"game.vrCutsceneFollowTurns", true},
+        .vrCutsceneView {"game.vrCutsceneView", VrCutsceneView::Window},
+        .vrHudDistance {"game.vrHudDistance", 90},
+        .vrHudSize {"game.vrHudDiagonal", 93},
+        .vrTvSize {"game.vrTvDiagonal", 760},
+        .vrTvDistance {"game.vrTvDistance", 500},
 
         // Audio
         .noLowHpSound {"game.noLowHpSound", false},
@@ -444,13 +448,17 @@ void registerSettings() {
     Register(g_userSettings.game.vrSnapTurn);
     Register(g_userSettings.game.vrSnapTurnAngle);
     Register(g_userSettings.game.vrStableCamera);
-    Register(g_userSettings.game.vrSmoothStartStop);
-    Register(g_userSettings.game.vrInstantStartFacing);
+    Register(g_userSettings.game.vrMovementEnhancements);
     Register(g_userSettings.game.vrLightingMode);
-    Register(g_userSettings.game.vrSunGlareDimming);
     Register(g_userSettings.game.vrCutsceneFaceCamera);
-    Register(g_userSettings.game.vrAccurateObjectLighting);
     Register(g_userSettings.game.vrHorseTurnView);
+    Register(g_userSettings.game.vrZTargetLockView);
+    Register(g_userSettings.game.vrCutsceneFollowTurns);
+    Register(g_userSettings.game.vrCutsceneView);
+    Register(g_userSettings.game.vrHudDistance);
+    Register(g_userSettings.game.vrHudSize);
+    Register(g_userSettings.game.vrTvSize);
+    Register(g_userSettings.game.vrTvDistance);
     Register(g_userSettings.game.enableFastIronBoots);
     Register(g_userSettings.game.canTransformAnywhere);
     Register(g_userSettings.game.fastRoll);

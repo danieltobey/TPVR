@@ -15,7 +15,6 @@
 
 #if TARGET_PC
 #include "dusk/vr/vr_main.hpp"
-#include "dusk/settings.h"
 #include "dusk/game_clock.h"
 #include "dusk/interp/frame_interpolation.h"
 #include "dusk/interp/samples.h"
@@ -439,15 +438,14 @@ void dKyr_sun_move() {
         g_env_light.mpSunLenzPacket->mDrawLenzInSky = FALSE;
     }
 
-    // VR (2026-09-29, game.vrSunGlareDimming, default off): the sun-glare
+    // VR (2026-09-29): disabled in VR. The sun-glare
     // darkening below scales the whole scene's lighting, fog and sky by how
     // close the sun is to the centre of the FLATSCREEN camera's view and how
     // unoccluded it is -- so in VR it tracks an invisible camera, and walking
     // under a tree or roof (occluding the sun) pumps the entire scene's
     // brightness up and down. The lens flare itself is unaffected.
 #if TARGET_PC
-    const bool vrSkipGlareDimming = dusk::vr::isRenderingToHeadset() &&
-                                    !dusk::getSettings().game.vrSunGlareDimming.getValue();
+    const bool vrSkipGlareDimming = dusk::vr::isRenderingToHeadset();
 #else
     const bool vrSkipGlareDimming = false;
 #endif

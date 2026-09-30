@@ -49,6 +49,7 @@
 #include "dusk/vr/vr_xr_submit.hpp"             // dusk::vr::Session
 #include "dusk/vr/vr_menu_gamepad.hpp"          // dusk::vr::ensureVrMenuGamepadAttached, etc.
 #include "dusk/vr/vr_main.hpp"
+#include "dusk/vr/vr_devtools.hpp"            // DUSK_VR_DEVTOOLS: screenshots etc.
 #include "d/actor/d_a_horse.h"                // daHorse_c -- horse turn follow
 #include "dusk/interp/frame_interpolation.h"   // sim_tick_seq/get_interpolation_step
 
@@ -620,6 +621,8 @@ static bool g_vrLightCamValid = false;
 static float g_vrLightEye[3] = {0.f, 0.f, 0.f};
 static float g_vrLightYawRad = 0.f;
 
+static constexpr int kVrMenuRenderMaxWidth = 1200;
+
 static bool g_vrAudioValid = false;
 static Mtx g_vrAudioViewMtx;
 static float g_vrAudioEye[3] = {0.f, 0.f, 0.f};
@@ -640,6 +643,21 @@ bool getVrAudioListener(float (*outViewMtx)[4], float outEye[3], float outCenter
         outCenter[i] = g_vrAudioCenter[i];
     }
     return true;
+}
+
+// Cutscene crop frame for this frame's eye passes -- captured in tick()'s
+// cutscene block (before beginEye/beginStereoPass repurpose the shared view),
+// drawn after the scene. See vr_render::drawCutsceneFrame().
+static bool g_cutsceneFrameValid = false;
+static vr_render::CutsceneFrame g_cutsceneFrame;
+
+void drawCutsceneFrameIfActive() {
+    if (g_cutsceneFrameValid && isEyePassOpen()) {
+        vr_render::drawCutsceneFrame(g_cutsceneFrame);
+    }
+    // TV mode: everything after the 3D scene (HUD, text boxes, menus) uses
+    // the normal head view, unaffected by the TV view/zoom.
+    vr_render::switchToOverlayView();
 }
 
 bool getVrViewEye(float outEye[3]) {
@@ -970,6 +988,9 @@ bool startup() {
         // Must happen before the first endEye()/encodeEyeCopy() call, which
         // this satisfies since tick() can't run until g_session is set below.
         g_ownedSession->registerCpuCopyEncoderTask();
+#if DUSK_VR_DEVTOOLS
+        dusk::vr::devtools::registerTasks();
+#endif
         // NOTE: initSession() (which sets g_session, and therefore isActive())
         // is deliberately NOT called here yet -- see below. It used to be
         // called immediately after construction, which meant isActive() could
@@ -1010,13 +1031,19 @@ bool startup() {
         // shared images, composition layer rects) reads g_eyeImageWidth/
         // Height instead of the runtime's recommended values.
         {
-            const float scale = std::clamp(dusk::getSettings().game.vrRenderScale.getValue(), 0.5f, 1.0f);
-            const auto scaled = [scale](uint32_t v) {
+            // Above 100% = supersampling (2026-09-29); the Video page's
+            // Internal Resolution does not reach the VR eye passes, which are
+            // created at exactly this size. Capped so the double-wide
+            // swapchain stays within the runtime's maximum image size.
+            const float scale = std::clamp(dusk::getSettings().game.vrRenderScale.getValue(), 0.5f, 2.0f);
+            const auto scaled = [scale](uint32_t v, uint32_t maxV) {
                 const uint32_t s = static_cast<uint32_t>(static_cast<float>(v) * scale) & ~7u;
-                return std::max<uint32_t>(s, 64);
+                return std::clamp<uint32_t>(s, 64, std::max<uint32_t>(maxV & ~7u, 64));
             };
-            g_eyeImageWidth = scaled(configViews[0].recommendedImageRectWidth);
-            g_eyeImageHeight = scaled(configViews[0].recommendedImageRectHeight);
+            g_eyeImageWidth = scaled(configViews[0].recommendedImageRectWidth,
+                                     configViews[0].maxImageRectWidth / 2);
+            g_eyeImageHeight = scaled(configViews[0].recommendedImageRectHeight,
+                                      configViews[0].maxImageRectHeight);
         }
         const uint32_t eyeWidth = g_eyeImageWidth;
         const uint32_t eyeHeight = g_eyeImageHeight;
@@ -1492,6 +1519,15 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     // leave this stuck true from a prior frame that DID have the mirror
     // active.
     aurora::rmlui::set_force_no_backdrop(false);
+    // Menu sharpness (2026-09-29): draw the RmlUi canvas at roughly the size
+    // the menu billboard is shown in the headset (~900 px per eye; 1200 adds
+    // a little headroom) instead of the Quest's ~4100 px window surface,
+    // which minified text ~4.5x with no mipmaps -- chunky, shimmering small
+    // text. See aurora::rmlui::set_render_max_width().
+    aurora::rmlui::set_render_max_width(g_session ? kVrMenuRenderMaxWidth : 0);
+#if DUSK_VR_DEVTOOLS
+    dusk::vr::devtools::pollTriggers();
+#endif
 
     if (!g_session) {
         logTickReasonOnChange("no-session");
@@ -2186,9 +2222,18 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     // yaw only changes once per sim tick, so it's interpolated between the
     // last two ticks (same step as the rest of the presentation) to avoid a
     // 30Hz stair-step at display rate.
+    //
+    // SMOOTHED 2026-09-29 (user report: "turning is a bit jarring... no
+    // speed ramping on horse turns"): the horse's yaw starts and stops
+    // turning at full rate with the stick, so the view eases toward it
+    // (exponential, kHorseTurnViewSmoothSec) rather than copying it --
+    // rotation speed ramps in and out, and still ends up exactly as far
+    // round as the horse turned.
     {
+        constexpr float kHorseTurnViewSmoothSec = 0.4f;  // 0.2 still felt abrupt (user, 2026-09-29)
         static bool s_horseFollowActive = false;
-        static s16 s_horseYawPrevS = 0, s_horseYawCurrS = 0, s_horseYawAppliedS = 0;
+        static s16 s_horseYawPrevS = 0, s_horseYawCurrS = 0;
+        static float s_horseYawAppliedRad = 0.f;
         static uint64_t s_horseYawTick = 0;
 
         daHorse_c* horse = nullptr;
@@ -2205,7 +2250,8 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
             const s16 yawS = horse->shape_angle.y;
             const uint64_t tick = dusk::interp::sim_tick_seq();
             if (!s_horseFollowActive) {
-                s_horseYawPrevS = s_horseYawCurrS = s_horseYawAppliedS = yawS;
+                s_horseYawPrevS = s_horseYawCurrS = yawS;
+                s_horseYawAppliedRad = cM_s2rad(yawS);
                 s_horseYawTick = tick;
                 s_horseFollowActive = true;
             } else {
@@ -2218,10 +2264,76 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
                 const s16 presentedS = static_cast<s16>(
                     s_horseYawPrevS +
                     static_cast<s16>(static_cast<s16>(s_horseYawCurrS - s_horseYawPrevS) * step));
-                const s16 deltaS = static_cast<s16>(presentedS - s_horseYawAppliedS);
-                s_horseYawAppliedS = presentedS;
-                if (deltaS != 0) {
-                    dusk::vr::snapScriptedCameraYaw(cM_s2rad(deltaS));
+                const float gapRad = std::remainder(cM_s2rad(presentedS) - s_horseYawAppliedRad,
+                                                    2.f * 3.14159265f);
+                const float blend =
+                    1.f - std::exp(-static_cast<float>(pacing.dt) / kHorseTurnViewSmoothSec);
+                const float deltaRad = gapRad * blend;
+                s_horseYawAppliedRad += deltaRad;
+                if (deltaRad != 0.f) {
+                    dusk::vr::snapScriptedCameraYaw(deltaRad);
+                }
+            }
+        }
+    }
+
+    // --- Z-target lock-on: snap to the target, then follow its bearing
+    // (2026-09-29, game.vrZTargetLockView, default on) ---
+    // First person only (Third Person mode has its own Z-target camera
+    // tracking below). On lock-on -- or switching to a new target -- snap the
+    // view's yaw so the target is straight ahead. While the lock is held,
+    // rotate the view by however much the target's bearing from Link changes
+    // (e.g. circle-strafing), so it keeps its place relative to where the
+    // player is looking; head look stays completely free and is never pulled
+    // back to centre. Yaw only. The bearing changes once per sim tick, so it's
+    // interpolated between the last two ticks, same as the horse follow.
+    {
+        static fopAc_ac_c* s_lockTarget = nullptr;
+        static s16 s_lockPrevS = 0, s_lockCurrS = 0, s_lockAppliedS = 0;
+        static uint64_t s_lockTick = 0;
+
+        auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
+        fopAc_ac_c* target = nullptr;
+        if (dusk::getSettings().game.vrZTargetLockView.getValue() && link != nullptr &&
+            !dusk::getSettings().game.vrThirdPerson.getValue() && !link->checkEventRun() &&
+            link->checkAttentionLock())
+        {
+            target = link->getAtnActor();
+        }
+
+        if (target == nullptr) {
+            s_lockTarget = nullptr;
+        } else {
+            const float dx = target->current.pos.x - link->current.pos.x;
+            const float dz = target->current.pos.z - link->current.pos.z;
+            if (std::abs(dx) > 0.001f || std::abs(dz) > 0.001f) {
+                const s16 bearingS = cM_atan2s(dx, dz);
+                const uint64_t tick = dusk::interp::sim_tick_seq();
+                if (target != s_lockTarget) {
+                    // New lock (or switched target): face it.
+                    const cXyz headFwd = vr_render::computeHeadWorldForward(
+                        hmdPose, dusk::vr::getSmoothTurnYawRad());
+                    const s16 headYawS = cM_atan2s(headFwd.x, headFwd.z);
+                    dusk::vr::snapScriptedCameraYaw(
+                        cM_s2rad(static_cast<s16>(bearingS - headYawS)));
+                    s_lockTarget = target;
+                    s_lockPrevS = s_lockCurrS = s_lockAppliedS = bearingS;
+                    s_lockTick = tick;
+                } else {
+                    if (tick != s_lockTick) {
+                        s_lockPrevS = s_lockCurrS;
+                        s_lockCurrS = bearingS;
+                        s_lockTick = tick;
+                    }
+                    const float step = dusk::interp::get_interpolation_step();
+                    const s16 presentedS = static_cast<s16>(
+                        s_lockPrevS +
+                        static_cast<s16>(static_cast<s16>(s_lockCurrS - s_lockPrevS) * step));
+                    const s16 deltaS = static_cast<s16>(presentedS - s_lockAppliedS);
+                    s_lockAppliedS = presentedS;
+                    if (deltaS != 0) {
+                        dusk::vr::snapScriptedCameraYaw(cM_s2rad(deltaS));
+                    }
                 }
             }
         }
@@ -2288,15 +2400,18 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         // where he faces. The setting off disables all of this block.
         const bool faceCutsceneCamera = dusk::getSettings().game.vrCutsceneFaceCamera.getValue();
         auto* cutsceneLink = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
-        bool cutsceneActive = false;
-        if (faceCutsceneCamera && cutsceneLink != nullptr) {
+        // Whether the view is following the game's event/cutscene camera --
+        // independent of the settings, which gate what's done about it.
+        bool cameraDrivenEvent = false;
+        if (cutsceneLink != nullptr) {
             const bool eventCamera = cutsceneLink->checkEventRun() &&
                                      !dusk::vr::isVrFirstPerson(cutsceneLink) &&
                                      !dusk::vr::isWolfFirstPersonView(cutsceneLink);
-            cutsceneActive = eventCamera ||
-                             (dusk::vr::isRealCutsceneRunning() &&
-                              !dusk::vr::isVrFirstPerson(cutsceneLink));
+            cameraDrivenEvent = eventCamera ||
+                                (dusk::vr::isRealCutsceneRunning() &&
+                                 !dusk::vr::isVrFirstPerson(cutsceneLink));
         }
+        const bool cutsceneActive = faceCutsceneCamera && cameraDrivenEvent;
 
         if (!cutsceneActive && s_cutsceneJumpCutWasActive && faceCutsceneCamera &&
             cutsceneLink != nullptr)
@@ -2307,6 +2422,31 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
             const s16 currentYawS = cM_atan2s(currentHeadForward.x, currentHeadForward.z);
             dusk::vr::snapScriptedCameraYaw(
                 cM_s2rad(static_cast<s16>(cutsceneLink->shape_angle.y - currentYawS)));
+        }
+
+        g_cutsceneFrameValid = false;
+        vr_render::g_tvModeActive = false;
+        const VrCutsceneView cutsceneView = dusk::getSettings().game.vrCutsceneView.getValue();
+        if (cameraDrivenEvent && cutsceneView != VrCutsceneView::Full) {
+            if (view_class* view = dComIfGd_getView()) {
+                g_cutsceneFrame.eye = view->lookat.eye;
+                g_cutsceneFrame.center = view->lookat.center;
+                g_cutsceneFrame.fovyDeg = view->fovy;
+                g_cutsceneFrame.aspect = view->aspect;
+                g_cutsceneFrame.distance = 500.f;
+                g_cutsceneFrameValid = true;
+                if (cutsceneView == VrCutsceneView::Tv) {
+                    vr_render::g_tvModeActive = true;
+                    vr_render::g_tvEye = view->lookat.eye;
+                    vr_render::g_tvCenter = view->lookat.center;
+                    const float camHalf =
+                        std::clamp(view->fovy, 5.f, 150.f) * 0.5f * (3.14159265f / 180.f);
+                    vr_render::g_tvZoom =
+                        vr_render::tvScreenTanHalfFovy(view->aspect) / std::tan(camHalf);
+                    g_cutsceneFrame.distance =
+                        static_cast<float>(dusk::getSettings().game.vrTvDistance.getValue());
+                }
+            }
         }
 
         if (cutsceneActive) {
@@ -2335,6 +2475,17 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
                             cM_atan2s(currentHeadForward.x, currentHeadForward.z);
                         const s16 gapS = static_cast<s16>(targetYawS - currentYawS);
                         dusk::vr::snapScriptedCameraYaw(cM_s2rad(gapS));
+                    } else if (dusk::getSettings().game.vrCutsceneFollowTurns.getValue()) {
+                        // Within a shot: turn the view by however much the
+                        // cutscene camera panned since last frame (2026-09-29,
+                        // game.vrCutsceneFollowTurns), so authored pans are
+                        // matched while head look stays free. The camera's
+                        // own motion is already smooth, so it's applied 1:1.
+                        const s16 panS =
+                            static_cast<s16>(targetYawS - s_cutsceneJumpCutLastTargetYawS);
+                        if (panS != 0) {
+                            dusk::vr::snapScriptedCameraYaw(cM_s2rad(panS));
+                        }
                     }
 
                     s_cutsceneJumpCutLastTargetYawS = targetYawS;
@@ -2792,6 +2943,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     // computeHudPose() comments. Added per user feedback that the
     // head-locked panel felt "really shaky" with raw per-frame tracking.
     vr_render::updateHudSmoothing(hmdPose, dusk::vr::getSmoothTurnYawRad());
+    vr_render::updateTvSmoothing(hmdPose);
 
     // CONFIRMED this session (first HUD-billboard in-headset test came back
     // solid black): mDoGph_drawHud2D() draws nothing until fpcM_DrawIterater()
@@ -2936,6 +3088,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
                 vr_render::drawAimCrosshair(*link->getLineTopPosP());
             }
         }
+
         if (menuVisible) {
             if (!dusk::ui::is_prelaunch_open()) {
                 vr_render::drawMenuBillboardBackdrop(vr_render::g_menuBillboardAspectHeightOverWidth);
@@ -2948,6 +3101,10 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         aurora::gfx::ResolvedTargets targets =
             vr_render::endStereoPass(directRender ? &directTarget : nullptr, spaceWarpFrame);
         g_duskVREyePassOpen = false;
+#if DUSK_VR_DEVTOOLS
+        dusk::vr::devtools::captureIfRequested(targets.colorTexture, targets.width, targets.height,
+                                               targets.colorFormat);
+#endif
         g_perfEyeEndMs += perfMs(perfT4, PerfClock::now());
 
 #if DUSK_VR_XR_GRAPHICS_VULKAN
@@ -3061,6 +3218,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
             }
         }
 
+
         // VR menu billboard, Phase 2 plan step 4 -- real RmlUi content
         // (see the per-frame copy above and vr_stereo_render.hpp's own
         // "VR menu billboard" section comment). aspectHeightOverWidth is
@@ -3098,6 +3256,12 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
 
         PerfClock::time_point perfEyeT4 = PerfClock::now();
         aurora::gfx::ResolvedTargets targets = vr_render::endEye();
+#if DUSK_VR_DEVTOOLS
+        if (eye == 0) {  // two-pass mode: capture the left eye
+            dusk::vr::devtools::captureIfRequested(targets.colorTexture, targets.width,
+                                                   targets.height, targets.colorFormat);
+        }
+#endif
         g_duskVREyePassOpen = false;
         g_perfEyeEndMs += perfMs(perfEyeT4, PerfClock::now());
 
@@ -3301,6 +3465,9 @@ void submitFrame() {
     // executed and been submitted -- safe to MapAsync after that.
     aurora::gfx::synchronize();
     const PerfClock::time_point perfAfterSync = PerfClock::now();
+#if DUSK_VR_DEVTOOLS
+    dusk::vr::devtools::finishIfPending();
+#endif
 
     for (const auto& eye : g_pendingSubmit.eyes) {
         // NEW this session (VR_MOD_HANDOFF_10 follow-up, option (c)): skip

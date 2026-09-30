@@ -824,6 +824,13 @@ endif ()
 
 # --- Option to disable ---
 option(DUSK_VR "Build Dusklight VR mod" ON)
+# Developer tooling (screenshots, remote console) -- docs/vr-specs/10-dev-tooling.md.
+# Off by default; the dev environment's build.sh turns it on.
+option(DUSK_VR_DEVTOOLS "Build VR developer tooling" OFF)
+if (DUSK_VR AND DUSK_VR_DEVTOOLS)
+    target_compile_definitions(dusklight PRIVATE DUSK_VR_DEVTOOLS=1)
+    message(STATUS "Dusklight VR: developer tooling ENABLED")
+endif ()
 if (NOT DUSK_VR)
     message(STATUS "Dusklight VR: disabled (DUSK_VR=OFF)")
     return()

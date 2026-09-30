@@ -113,9 +113,6 @@ bool is_model_replay_deferred();
 // aimed for the flatscreen chase camera -- their shading changed as Link
 // moved. J3DModel::entry() records these too while in VR.
 bool has_recorded_light_view(const J3DModelData* data);
-// game.vrAccurateObjectLighting: off skips the above (static lit models keep
-// flatscreen-camera lighting) to save CPU.
-void set_record_lit_models(bool enabled);
 
 // Accumulated model-replay cost since the last call (performance logging).
 struct ReplayStats {

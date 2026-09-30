@@ -574,14 +574,8 @@ void set_defer_model_replay(bool defer) {
     s_deferModelReplay = defer;
 }
 
-bool s_recordLitModels = true;
-
-void set_record_lit_models(bool enabled) {
-    s_recordLitModels = enabled;
-}
-
 bool has_recorded_light_view(const J3DModelData* data) {
-    if (!s_deferModelReplay || !s_recordLitModels) {
+    if (!s_deferModelReplay) {
         return false;
     }
     const auto& views = tables().lightViews;
