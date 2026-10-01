@@ -1,6 +1,6 @@
 # 10 Dev tooling
 
-**Status:** Phase 1 🟡 Built: screenshot ✅, live mirror ✅, keep-awake awaiting the 30-minute check. Phase 2: remote console ✅, test driver ✅, unit tests 🟡 (host checks ✅; headset: TV, HUD, crawl/swim ✅, horse and fill light pending); CI ✅. Phase 3 📝 Approved, not started.
+**Status:** Phase 1 🟡 Built: screenshot ✅, live mirror ✅, keep-awake awaiting the 30-minute check. Phase 2: remote console ✅, test driver ✅, unit tests 🟡 (host checks ✅; headset: TV, HUD, crawl/swim ✅, horse and fill light pending); CI ✅. Phase 3 📝 Approved (details approved 2026-10-01), in progress.
 
 ## Problem
 Development depends on the tester relaying what they see, and on a headset connection that drops whenever the Quest sleeps (stale Wi-Fi adb, interrupted installs). Changes can't be checked without someone wearing the headset, the Windows build is never compiled, and there's no fast way to catch regressions in the maths or to profile performance.
@@ -48,16 +48,23 @@ Tooling for the dev environment in `~/Documents/TPVR-dev` and debug-only code in
      2. *Android*: the arm64 debug APK as `build.sh` makes it (developer tooling on), uploaded as a downloadable artifact.
      3. *Windows*: MSVC x86_64 with the OpenXR loader from vcpkg, so the VR code is compiled and linked. Windows arm64, Linux and macOS are not built.
    - **Aurora fork.** The menu fix's Aurora commit exists only locally, so CI can't fetch it. Fork `encounter/aurora` to `danieltobey/aurora` and push the `tpvr-vr-menu-cap` branch there; CI points the submodule at that fork before checkout (`.gitmodules` unchanged). This is also the fork the follow-up upstream PR needs.
-   - **Publishing.** Push `fix/stable-fp-camera` to the fork (public). From then on, pushing is how a CI run starts.
+   - **Publishing.** Push the build branch (`fix/stable-fp-camera`, renamed `dev` on 2026-10-01) to the fork (public). From then on, pushing is how a CI run starts.
    - The Android APK is signed with the CI machine's own debug key, so it can't update an installed dev build without an uninstall (which wipes that build's saves); use it for checking, and keep installing with `install.sh`.
    - `fork-ci.yml` is fork-only and stays out of upstream PRs. The OpenXR line for Windows could be offered upstream separately.
 
 ## Phase 3: Performance and debugging
 
-8. **Tracy profiling.** A build option to enable the already-integrated Tracy profiler; the Tracy viewer runs on the PC (container) and connects to the headset over Wi-Fi.
-9. **OVR Metrics Tool** installed on the headset; `tools/metrics.sh` pulls its CSV captures into `logs/`.
-10. **Crash symbolication.** `tools/crash.sh` pulls the latest crash and runs `ndk-stack` against the build's symbols, giving file:line stack traces.
-11. **Native debugger.** A documented recipe for attaching LLDB (from the NDK) to the running debug APK.
+8. **Tracy profiling.** The game already contains the Tracy profiler (Aurora fetches Tracy 0.14.1); it is compiled out by default. *(Details approved 2026-10-01.)*
+   - **Build option.** `./build.sh tracy` builds with Tracy on; plain `./build.sh` builds with it off. Switching recompiles most of the game (Tracy changes the code inside every profiled function), so expect one long build each way. On-demand mode (Aurora's default) stays on: nothing is recorded until the viewer connects.
+   - **Viewer.** Tracy 0.14.1, the same version as the game (Tracy needs viewer and game versions to match; Homebrew only has 0.13.1). Built from source in the container with Tracy's own bundled libraries, into `toolchains/tracy/`, and run on the host: the container can't use the NVIDIA driver (same reason scrcpy runs on the host). `tools/tracy.sh` forwards the game's Tracy port over adb (`adb forward tcp:8086`) and opens the viewer connected to it, so it works over Wi-Fi or USB without knowing the headset's IP. If the pinned Tracy version changes, `tools/tracy.sh` rebuilds the viewer.
+   - **VR zones.** A few named zones in the VR frame code (waiting for the headset's frame, rendering each eye, submitting the frame), so VR's own cost shows up next to the game's existing zones. They compile to nothing when Tracy is off.
+9. **OVR Metrics Tool.** Meta's metrics app (frame rate, CPU/GPU load and clocks, thermal level, dropped frames), installed once in the headset from the Meta Horizon Store (free). *(Details approved 2026-10-01.)*
+   - `tools/metrics.sh start` turns on its CSV recording over adb; `tools/metrics.sh stop` turns it off, pulls the new CSV files into `logs/metrics/` and prints a short summary (average and worst-1% FPS, average CPU and GPU load) so one run can be compared with another. `tools/metrics.sh overlay on|off` shows or hides its in-headset graph.
+   - Scenarios can bracket a measurement: the test driver gets a `metrics start|stop` line that `scenario.sh` acts on, so the same scripted walk gives comparable numbers.
+10. **Crash symbolication.** `tools/crash.sh` reads Android's crash log (`adb logcat -b crash`; no root needed), takes the latest TPVR crash, and runs the NDK's `ndk-stack` against the unstripped `libmain.so` from the last build, giving function names with file:line. Raw and symbolised reports are saved to `logs/crashes/<time>.txt`. If the crash's build ID doesn't match the local `libmain.so` (the installed APK is from a different build), it says so instead of printing misleading lines. *(Details approved 2026-10-01.)*
+    - A debug-only console command `crash` crashes the game on purpose (null pointer write), for checking this tool.
+11. **Native debugger.** `tools/debug.sh` attaches the NDK's LLDB (in the container) to the running game: it copies the NDK's `lldb-server` into the app (debug APKs allow `run-as`), starts it, connects over adb and loads the symbols from the last build. With no arguments it opens an interactive LLDB session; extra arguments are passed to LLDB, so it can also run non-interactively (e.g. `tools/debug.sh -o "b daAlink_c::execute" -o c -o bt -o detach`). The recipe is also written out in the script's header. *(Details approved 2026-10-01.)*
+    - Pausing the game at a breakpoint freezes its frames; the headset shows its loading dots until it continues.
 
 ## Verification
 | # | Check |
@@ -69,10 +76,10 @@ Tooling for the dev environment in `~/Documents/TPVR-dev` and debug-only code in
 | 5 | A scenario (warp to Ordon, `wait ready`, head lock, run forward 3 s, turn 90°, screenshot) run twice gives the same `pos` (within 1 unit) and screenshots that match by eye. Not pixel-identical: animals, NPCs, water and wind animate independently of input. ✅ (`tools/scenarios/ordon-walk.txt` twice: identical `pos`, 0.4% of pixels differ; 2026-09-29) |
 | 6 | `test.sh` runs all tests in under a minute; a deliberately broken helper fails a test. ✅ (21 tests, ~2 s; a broken horse remap fails 2; 2026-09-29) In the headset, the moved maths behaves as before: horse steering deadzone, TV size in a cutscene, HUD size, crawl/swim eye height, HUD and fill-light smoothing. ✅ TV size, HUD size and lag, crawl/swim height (2026-10-01); horse deadzone and fill-light follow not yet checked (no horse / dark area). |
 | 7 | A push to the fork produces green unit-test, Android and Windows jobs and a downloadable APK; a deliberately broken test turns the run red. | ✅ (2026-10-01: first run green in 33 min (tests 1, Android 12, Windows 33, cold cache), APK artifact 35 MB; a broken test on a throwaway branch failed the Unit tests job in 1 min.) |
-| 8 | The Tracy viewer shows live frame zones from the headset. |
-| 9 | Metrics CSV lands in `logs/`. |
-| 10 | A deliberate test crash yields a symbolised stack. |
-| 11 | LLDB stops at a breakpoint in `daAlink_c::execute()`. |
+| 8 | With a `tracy` build, `tools/tracy.sh` shows live frames from the headset, including the VR zones; a normal build has no Tracy port open. |
+| 9 | `metrics.sh start` … `stop` around the Ordon walk scenario puts a CSV in `logs/metrics/` and prints the summary. |
+| 10 | `cmd.sh crash`, then `crash.sh`, gives a stack naming the `crash` command's function with its file:line. |
+| 11 | `debug.sh` stops at a breakpoint in `daAlink_c::execute()`, prints a backtrace with file:line, and the game carries on after detaching. |
 
 ## Out of scope
 Anti-aliasing, dynamic resolution and the performance fixes themselves (separate specs); GPU-level profilers (RenderDoc Meta fork, Snapdragon Profiler), pending a check of Linux support.
