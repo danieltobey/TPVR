@@ -1,6 +1,6 @@
 # 10 Dev tooling
 
-**Status:** Phase 1 🟡 Built: screenshot ✅, live mirror ✅, keep-awake awaiting the 30-minute check. Phase 2: remote console ✅, test driver ✅, unit tests 🟡 (host checks ✅; headset: TV, HUD, crawl/swim ✅, horse and fill light pending); CI ✅. Phase 3 ✅ Verified (2026-10-01): Tracy, metrics, crash stacks, LLDB.
+**Status:** Phase 1 ✅ Verified: keep awake, screenshot, live mirror. Phase 2 ✅ Verified: remote console, test driver, unit tests, CI (two headset re-checks of the moved maths deferred: horse deadzone, fill-light follow; see check 6). Phase 3 ✅ Verified (2026-10-01): Tracy, metrics, crash stacks, LLDB.
 
 ## Problem
 Development depends on the tester relaying what they see, and on a headset connection that drops whenever the Quest sleeps (stale Wi-Fi adb, interrupted installs). Changes can't be checked without someone wearing the headset, the Windows build is never compiled, and there's no fast way to catch regressions in the maths or to profile performance.
@@ -69,12 +69,12 @@ Tooling for the dev environment in `~/Documents/TPVR-dev` and debug-only code in
 ## Verification
 | # | Check |
 |---|---|
-| 1 | With `awake`, the headset stays connected for 30+ minutes off-head; `normal` restores sleep. |
+| 1 | With `awake`, the headset stays connected for 30+ minutes off-head; `normal` restores sleep. ✅ (Daniel, 2026-10-01) |
 | 2 | scrcpy shows the live view. ✅ (scrcpy 4.1) |
 | 3 | `screenshot.sh` returns the side-by-side PNG of both eyes within ~2 s. ✅ |
 | 4 | `cmd.sh "warp …"` warps the game; output appears in the log. ✅ (`warp F_SP103 0 0` → Ordon, `pos` confirms; 2026-09-29) |
 | 5 | A scenario (warp to Ordon, `wait ready`, head lock, run forward 3 s, turn 90°, screenshot) run twice gives the same `pos` (within 1 unit) and screenshots that match by eye. Not pixel-identical: animals, NPCs, water and wind animate independently of input. ✅ (`tools/scenarios/ordon-walk.txt` twice: identical `pos`, 0.4% of pixels differ; 2026-09-29) |
-| 6 | `test.sh` runs all tests in under a minute; a deliberately broken helper fails a test. ✅ (21 tests, ~2 s; a broken horse remap fails 2; 2026-09-29) In the headset, the moved maths behaves as before: horse steering deadzone, TV size in a cutscene, HUD size, crawl/swim eye height, HUD and fill-light smoothing. ✅ TV size, HUD size and lag, crawl/swim height (2026-10-01); horse deadzone and fill-light follow not yet checked (no horse / dark area). |
+| 6 | `test.sh` runs all tests in under a minute; a deliberately broken helper fails a test. ✅ (21 tests, ~2 s; a broken horse remap fails 2; 2026-09-29) In the headset, the moved maths behaves as before: horse steering deadzone, TV size in a cutscene, HUD size, crawl/swim eye height, HUD and fill-light smoothing. ✅ TV size, HUD size and lag, crawl/swim height (2026-10-01); horse deadzone and fill-light follow deferred (2026-10-01, Daniel's call): the host tests cover their maths; recheck when next riding Epona or in a dark area with Follow Look. |
 | 7 | A push to the fork produces green unit-test, Android and Windows jobs and a downloadable APK; a deliberately broken test turns the run red. ✅ (2026-10-01: first run green in 33 min (tests 1, Android 12, Windows 33, cold cache), APK artifact 35 MB; a broken test on a throwaway branch failed the Unit tests job in 1 min.) |
 | 8 | With a `tracy` build, `tools/tracy.sh` shows live frames from the headset, including the VR zones; a normal build has no Tracy port open. ✅ (2026-10-01: normal build, nothing listening on 8086; `tracy` build, a 10 s capture had 726 frames with all VR zones, e.g. xrWaitFrame 6.7 ms, both eyes 2.7 ms, tick 10.2 ms mean at the title. Daniel saw the live timeline in the viewer, VR zones included.) |
 | 9 | `metrics.sh start` … `stop` around the Ordon walk scenario puts a CSV in `logs/metrics/` and prints the summary. ✅ (2026-10-01, `ordon-walk-metrics.txt`: 16 samples in the window, 72.4 FPS average, CPU 38%, GPU 66%.) Overlay on/off ✅ (the FPS graph appears and goes, seen in system screenshots). |
@@ -86,4 +86,4 @@ Anti-aliasing, dynamic resolution and the performance fixes themselves (separate
 
 ## Open questions
 - ~~CI minutes on the fork are free for public repos; confirm the fork is public.~~ Public, Actions enabled (2026-10-01).
-- Should phase 2's debug commands also be available in release builds for future bug reports? (Proposed: no.)
+- ~~Should phase 2's debug commands also be available in release builds for future bug reports?~~ No: debug builds only (Daniel, 2026-10-01).
