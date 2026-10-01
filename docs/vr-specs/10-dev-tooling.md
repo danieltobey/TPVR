@@ -1,6 +1,6 @@
 # 10 Dev tooling
 
-**Status:** Phase 1 🟡 Built: screenshot ✅, live mirror ✅, keep-awake awaiting the 30-minute check. Phase 2: remote console ✅, test driver ✅, unit tests 🟡 (host checks ✅; headset: TV, HUD, crawl/swim ✅, horse and fill light pending); CI 📝 approved, not started. Phase 3 📝 Approved, not started.
+**Status:** Phase 1 🟡 Built: screenshot ✅, live mirror ✅, keep-awake awaiting the 30-minute check. Phase 2: remote console ✅, test driver ✅, unit tests 🟡 (host checks ✅; headset: TV, HUD, crawl/swim ✅, horse and fill light pending); CI ✅. Phase 3 📝 Approved, not started.
 
 ## Problem
 Development depends on the tester relaying what they see, and on a headset connection that drops whenever the Quest sleeps (stale Wi-Fi adb, interrupted installs). Changes can't be checked without someone wearing the headset, the Windows build is never compiled, and there's no fast way to catch regressions in the maths or to profile performance.
@@ -41,7 +41,7 @@ Tooling for the dev environment in `~/Documents/TPVR-dev` and debug-only code in
    - **Pure maths header.** The maths moves into `src/dusk/vr/vr_math.hpp`, which includes only the C++ standard library (its own small `Vec3`/`Quat` types; no game, OpenXR or Aurora headers). Its functions take plain numbers and return plain numbers.
    - **Call sites unchanged in behaviour.** The game code keeps reading settings and game state itself and calls these functions with the values; the formulas are moved, not changed.
    - **Standalone test build.** `tests/vr/` is its own CMake project (doctest header vendored in `extern/doctest/`), independent of the game and Android builds. Compiled with the latest stable clang in the container (clang 23 from apt.llvm.org).
-7. **CI on the fork.** GitHub Actions enabled on `danieltobey/TPVR`, so every push builds Android and Windows. Confirms the Windows build compiles before a PR. *(Details proposed 2026-10-01, awaiting approval.)*
+7. **CI on the fork.** GitHub Actions enabled on `danieltobey/TPVR`, so every push builds Android and Windows. Confirms the Windows build compiles before a PR. *(Details approved and built 2026-10-01.)*
    - **Own workflow file.** `.github/workflows/fork-ci.yml`, which runs only on `danieltobey/TPVR`. Upstream's `build.yml` is left unchanged and switched off on the fork in its Actions settings, so upstream merges never conflict. (It fails on every desktop job upstream anyway: Linux and macOS have no VR support, and Windows never installs the OpenXR loader, so the VR code is skipped and linking fails.)
    - **Three jobs**, on every push to any branch of the fork and on demand; pushes that only change docs or `*.md` skip them:
      1. *Unit tests*: `tests/vr` built with the latest stable clang and run (Linux runner, ~1 min).
@@ -49,6 +49,7 @@ Tooling for the dev environment in `~/Documents/TPVR-dev` and debug-only code in
      3. *Windows*: MSVC x86_64 with the OpenXR loader from vcpkg, so the VR code is compiled and linked. Windows arm64, Linux and macOS are not built.
    - **Aurora fork.** The menu fix's Aurora commit exists only locally, so CI can't fetch it. Fork `encounter/aurora` to `danieltobey/aurora` and push the `tpvr-vr-menu-cap` branch there; CI points the submodule at that fork before checkout (`.gitmodules` unchanged). This is also the fork the follow-up upstream PR needs.
    - **Publishing.** Push `fix/stable-fp-camera` to the fork (public). From then on, pushing is how a CI run starts.
+   - The Android APK is signed with the CI machine's own debug key, so it can't update an installed dev build without an uninstall (which wipes that build's saves); use it for checking, and keep installing with `install.sh`.
    - `fork-ci.yml` is fork-only and stays out of upstream PRs. The OpenXR line for Windows could be offered upstream separately.
 
 ## Phase 3: Performance and debugging
@@ -67,7 +68,7 @@ Tooling for the dev environment in `~/Documents/TPVR-dev` and debug-only code in
 | 4 | `cmd.sh "warp …"` warps the game; output appears in the log. ✅ (`warp F_SP103 0 0` → Ordon, `pos` confirms; 2026-09-29) |
 | 5 | A scenario (warp to Ordon, `wait ready`, head lock, run forward 3 s, turn 90°, screenshot) run twice gives the same `pos` (within 1 unit) and screenshots that match by eye. Not pixel-identical: animals, NPCs, water and wind animate independently of input. ✅ (`tools/scenarios/ordon-walk.txt` twice: identical `pos`, 0.4% of pixels differ; 2026-09-29) |
 | 6 | `test.sh` runs all tests in under a minute; a deliberately broken helper fails a test. ✅ (21 tests, ~2 s; a broken horse remap fails 2; 2026-09-29) In the headset, the moved maths behaves as before: horse steering deadzone, TV size in a cutscene, HUD size, crawl/swim eye height, HUD and fill-light smoothing. ✅ TV size, HUD size and lag, crawl/swim height (2026-10-01); horse deadzone and fill-light follow not yet checked (no horse / dark area). |
-| 7 | A push to the fork produces green unit-test, Android and Windows jobs and a downloadable APK; a deliberately broken test turns the run red. |
+| 7 | A push to the fork produces green unit-test, Android and Windows jobs and a downloadable APK; a deliberately broken test turns the run red. | ✅ (2026-10-01: first run green in 33 min (tests 1, Android 12, Windows 33, cold cache), APK artifact 35 MB; a broken test on a throwaway branch failed the Unit tests job in 1 min.) |
 | 8 | The Tracy viewer shows live frame zones from the headset. |
 | 9 | Metrics CSV lands in `logs/`. |
 | 10 | A deliberate test crash yields a symbolised stack. |
