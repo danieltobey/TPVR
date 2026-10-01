@@ -2,6 +2,8 @@
 
 **Status:** ✅ Verified (steady camera). 🟡 Built: Perspective choice and "Camera Follows Animations" naming.
 
+**Upstream:** fork-only. JoeyAW merged PR #10 on 2026-09-29 without this steady camera (removed at their request); Daniel keeps it in his build (2026-10-01). Leave it out of future upstream PRs.
+
 ## Problem
 In first person the camera rode Link's animated body: it leaned forward along his facing when running, swung when he turned, popped when the stick was pressed or released, and overshot on starts and stops (it predicted one tick ahead). Swimming, crawling, vines and dialogue followed the animated head, so every stroke or gesture moved the view.
 

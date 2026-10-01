@@ -985,6 +985,13 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                     "<br/><b>Third Person:</b> the game's original third-person camera behind "
                     "Link.");
             });
+        config_bool_select(leftPane, rightPane, getSettings().game.vrThirdPersonFollowCameraYaw,
+            {
+                .key = "Turn With Game Camera",
+                .helpText = "In third person, your view turns when the game's camera swings "
+                            "left or right, such as following Link as he runs. On by default.",
+                .isDisabled = [] { return !getSettings().game.vrThirdPerson.getValue(); },
+            });
         // Shown inverted over game.vrStableCamera: on = the original camera
         // that follows Link's animations, off (default) = steady camera.
         {
