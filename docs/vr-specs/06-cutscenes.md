@@ -1,6 +1,6 @@
 # 06 Cutscenes
 
-**Status:** ✅ Verified: facing, pan following, Window crop, TV mode (size, float, stereo), HUD unaffected by TV. 🟡 Built: TV Size / TV Distance settings in cm, TV Height.
+**Status:** ✅ Verified: facing, pan following, Window crop, TV mode (size, float, stereo), HUD unaffected by TV, TV Height (2026-10-01). 🟡 Built: TV Size / TV Distance settings in cm.
 
 ## Problem
 - Cutscene view direction came only from the headset plus accumulated stick turning, so whether you faced the action depended on how you'd turned in-game, and mid-shot camera pans weren't followed.
@@ -32,4 +32,4 @@
 - Window: outside the frame is black, text boxes stay visible. ✅
 - TV: constant screen size across close-ups and wide shots, trails fast head turns and settles, stays level, stereo comfortable, HUD unaffected. ✅
 - TV Size / Distance change the screen as a real screen would. 🟡
-- TV Height: the default sits lower than before (centre 10% of the screen's height below where you look); −50% / +50% move it clearly down / up; 0% matches the old position; the TV still follows head turns and tilts and settles as before. 🟡 Host unit test for the offset angle. 🟡
+- TV Height: the default sits lower than before (centre 10% of the screen's height below where you look); −50% / +50% move it clearly down / up; 0% matches the old position; the TV still follows head turns and tilts and settles as before. ✅ (2026-10-01: Daniel tuned it in the headset to 660 cm / 550 cm / −10%, now the defaults.) Host unit test for the offset angle. ✅
