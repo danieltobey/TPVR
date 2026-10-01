@@ -197,8 +197,18 @@ void runInput(Request& req, const std::vector<std::string>& args) {
 }
 
 // Runs lines until the script has to wait or ends. Returns true when done.
+static bool s_remoteControl = false;
+
 bool step(Request& req) {
     static CommandState s_state;  // one for the session, like the in-game console
+
+    if (!s_remoteControl) {
+        s_remoteControl = true;
+        // Scripts warp straight from the title, where no file is loaded and
+        // the file number defaults to slot 1. Point it at slot 3 so even a
+        // stray save can't land in slot 1 (Daniel's playthrough).
+        dComIfGs_setDataNum(2);
+    }
 
     if (req.waitTicks > 0) {
         --req.waitTicks;
@@ -366,6 +376,10 @@ float takeScriptedTurnRad() {
 
 bool isHeadLocked() {
     return input().headLocked;
+}
+
+bool hasRemoteControl() {
+    return s_remoteControl;
 }
 
 }  // namespace dusk::vr::devtools

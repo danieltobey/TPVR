@@ -743,7 +743,8 @@ static void updateCombatCamera(float dtSec, const XrPosef& hmdPose) {
         return;
     }
 
-    const bool wanted = s_delay.update(isCombatMusicPlaying(), dtSec);
+    const bool combatMusic = isCombatMusicPlaying();
+    const bool wanted = s_delay.update(combatMusic, dtSec);
     // Fade only when the switch would change what's on screen during play:
     // events have their own camera rules (and fades), and the game's own
     // first-person modes switch at once.
@@ -751,6 +752,28 @@ static void updateCombatCamera(float dtSec, const XrPosef& hmdPose) {
                            !vr_link::isHookshotAirborneOrHanging(link);
     const bool switched = g_combatFade.update(wanted, allowFade, dtSec);
     vr_link::g_combatThirdPerson = g_combatFade.shown;
+
+    // Log every change of music or combat state, for checking which tracks
+    // count as combat.
+    {
+        static u32 s_lastMain = 0, s_lastSub = 0;
+        static bool s_lastMusic = false, s_lastWanted = false, s_lastShown = false;
+        Z2SeqMgr* seq = Z2GetSeqMgr();
+        const u32 mainId = seq ? seq->getMainBgmID() : 0;
+        const u32 subId = seq ? seq->getSubBgmID() : 0;
+        if (mainId != s_lastMain || subId != s_lastSub || combatMusic != s_lastMusic ||
+            wanted != s_lastWanted || g_combatFade.shown != s_lastShown)
+        {
+            VrLog.info("combat camera: main BGM {:#x} sub BGM {:#x} combat music {} wanted {} "
+                       "shown {}",
+                       mainId, subId, combatMusic, wanted, g_combatFade.shown);
+            s_lastMain = mainId;
+            s_lastSub = subId;
+            s_lastMusic = combatMusic;
+            s_lastWanted = wanted;
+            s_lastShown = g_combatFade.shown;
+        }
+    }
 
     // Switching in while the view is black: turn the view so straight ahead
     // looks from the game camera at Link, so he is in front of you and

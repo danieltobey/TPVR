@@ -47,6 +47,11 @@ float takeScriptedTurnRad();
 // `head lock`: render from a fixed head pose instead of the tracked one.
 bool isHeadLocked();
 
+// True once any remote command has run this session. Auto-save is off from
+// then on (dusk/autosave.cpp), so scripted runs never write Daniel's saves;
+// slot 1 is his playthrough and must never be overwritten.
+bool hasRemoteControl();
+
 }  // namespace dusk::vr::devtools
 
 #endif  // DUSK_VR_DEVTOOLS

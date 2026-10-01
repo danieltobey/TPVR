@@ -1,6 +1,6 @@
 # 11 Combat camera and third-person movement
 
-**Status:** 🟡 Built (2026-10-01), approved the same day; not yet verified in the headset.
+**Status:** 🟡 Built (2026-10-01). Scripted headset run passed for entering and leaving combat (see Verification); the rest needs Daniel's in-headset check.
 
 **Upstream:** candidate for a future upstream PR. Branch `feature/combat-camera` from `dev`, because it extends the Perspective choice on the regrouped settings page (specs 01 and 09), which upstream doesn't have yet.
 
@@ -42,7 +42,8 @@ The delays and fade times are constants (0.5 s, 2 s, 0.15 s), not settings. They
 First-person settings that are greyed out in third person (Camera Follows Animations, and any others) stay available while Third Person in Combat is on, because the view is first person most of the time. Turn With Game Camera applies to the combat view too.
 
 ## Verification
-- Walk up to a Bokoblin (Faron Woods, or Kakariko Gorge at night): the battle music starts, then the view fades to third person. Kill it: about 2 s after the music stops, the view fades back to first person. 🔲
+- Walk up to a Bokoblin (Faron Woods, or Kakariko Gorge at night): the battle music starts, then the view fades to third person. Kill it: about 2 s after the music stops, the view fades back to first person. 🟡 Scripted run (`combat-camera.txt`, Faron Woods, 2026-10-01): battle music (sub BGM `0x100000f`) switched the view to third person behind Link facing the Bulblin, and back to first person after it was removed. Fade not yet seen by eye.
+- Areas without battle music don't switch: in Ordon village the music stays the village track (`0x1000005`) with an enemy next to Link. Expected with the music-based rule.
 - Walk past an enemy that notices Link for a moment and then loses him: the view doesn't switch, or doesn't flicker back and forth. 🔲
 - In combat, Z-target an enemy and draw the bow: the view stays in third person and the arrow hits the target. 🔲
 - In combat, draw the bow without Z-targeting: the view switches to first person right away, with no fade. Put the bow away: the view goes back to third person right away. 🔲
@@ -64,6 +65,7 @@ First-person settings that are greyed out in third person (Camera Follows Animat
 - `vr_link_visibility.hpp`: `isCombatThirdPersonView()` (switched in, no event running, not in a game first-person mode, not in clawshot flight) makes `isFirstPerson()` and `isWolfFirstPersonView()` return false. `isThirdPersonMode()` (Third Person choice or combat view) replaces the bare `vrThirdPerson` checks for Link's body visibility, Turn With Game Camera, third-person Z-target tracking and the first-person Z-target lock. `isGameFirstPersonProc()` lists the *_SUBJECT aim procs and *_SUBJECTIVITY look procs.
 - Fade: `vr_render::drawViewFade()` draws one black, alpha-blended quad in view space after the 3D scene and the cutscene frame, before the HUD billboard (`drawCutsceneFrameIfActive()`).
 - Movement: `d_a_alink.cpp` adds the stick angle to `dusk::vr::getMoveBasisAngleS()` instead of `getHeadMoveAngleS()`. Camera basis = `computeHeadWorldForward()` with the head orientation replaced by identity (smooth-turn yaw only). The hold rule is `MoveBasisHold`; "stick held" means stick value > 0.05.
+- Every change of the main/sub BGM IDs or the combat state is logged (`combat camera: ...` in the game log), for checking which tracks count as combat.
 - Pure logic (`CombatDelay`, `ViewFade`, `MoveBasisHold`, `angleDiffS`) is in `vr_math.hpp`, with host tests in `tests/vr/vr_math_tests.cpp` (suite "combat camera (spec 11)").
-- `tools/scenarios/combat-camera.txt`: warps to Ordon, spawns a Bulblin next to Link, screenshots before, during and after the fight. Needs `game.vrThirdPersonInCombat` on.
+- `tools/scenarios/combat-camera.txt`: warps to Faron Woods (Ordon has no battle music), spawns a Bulblin next to Link, screenshots before, during and after the fight. Needs `game.vrThirdPersonInCombat` on.
 - The movement fix also changes the plain Third Person choice, so it could go upstream on its own. It shares files with the combat switch, so a `pr/*` branch would need to take it apart by hand.
