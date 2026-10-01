@@ -30,7 +30,7 @@ Spec-driven development for the TPVR comfort, lighting, audio and presentation w
 | [08 Render resolution](08-render-resolution.md) | 🟡 Built |
 | [09 VR settings page](09-vr-settings-page.md) | 🟡 Built |
 | [10 Dev tooling](10-dev-tooling.md) | ✅ Verified (horse deadzone / fill-light follow re-checks deferred) |
-| [11 Combat camera & third-person movement](11-combat-camera.md) | 📝 Proposed |
+| [11 Combat camera & third-person movement](11-combat-camera.md) | 🟡 Built |
 | Anti-aliasing | 📝 To be specified |
 | Dynamic resolution scaling | 📝 To be specified |
 | Performance investigation | 📝 To be specified |

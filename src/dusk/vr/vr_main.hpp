@@ -329,6 +329,17 @@ float getSmoothTurnYawRad();
 // relationship to where the player's head is actually turned in VR.
 s16 getHeadMoveAngleS();
 
+// Spec 11: the yaw the movement stick is relative to this sim tick -- the
+// headset's (getHeadMoveAngleS()) in first person, the third-person view's
+// own yaw (no head rotation) in third person with Third Person Movement =
+// Camera, and the previous basis held through a view switch while the stick
+// stays pushed. Call once per sim tick, after reading the stick.
+s16 getMoveBasisAngleS(daAlink_c* link, f32 stickValue, s16 stickAngle);
+
+// Spec 11: Link is shown in third person by the Third Person choice or by
+// the Third Person in Combat switch (vr_link::isThirdPersonMode()).
+bool isThirdPersonMode(daAlink_c* link);
+
 // Viewpoint for the base game's camera-relative lighting (d_kankyo.cpp's
 // dKy_light_eye()/dKy_light_center(), 2026-09-28). The kankyo code places
 // several lights relative to dComIfGp_getCamera(0)'s lookat eye/center --

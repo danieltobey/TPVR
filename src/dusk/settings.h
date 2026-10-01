@@ -366,6 +366,13 @@ struct UserSettings {
         // the game camera while the headset still looks around freely on top.
         // Default on.
         ConfigVar<bool> vrThirdPersonFollowCameraYaw;
+        // Spec 11: in first person, switch to the third-person view during
+        // combat (battle/boss music), with a fade. Default off.
+        ConfigVar<bool> vrThirdPersonInCombat;
+        // Spec 11: in the third-person view (Third Person, or a combat
+        // switch), the movement stick is relative to the camera (on) or to
+        // the headset (off, the old behaviour). Default on.
+        ConfigVar<bool> vrThirdPersonCameraMovement;
         // Attaches Link's body rotation to the headset's own yaw. Without
         // this, current.angle.y/shape_angle.y (daAlink_c::
         // setSpeedAndAngleNormal(), d_a_alink.cpp) only ease toward

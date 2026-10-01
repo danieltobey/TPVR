@@ -223,3 +223,111 @@ TEST_SUITE("panels") {
         CHECK(std::sqrt(p.width * p.width + p.height * p.height) == Approx(93.f));
     }
 }
+
+TEST_SUITE("combat camera (spec 11)") {
+    constexpr float kTick = 1.f / 72.f;
+
+    // Feeds the same signal for `sec` seconds of 72 Hz frames.
+    bool run(CombatDelay& d, bool signal, float sec) {
+        bool out = d.active;
+        for (float t = 0.f; t < sec; t += kTick) out = d.update(signal, kTick);
+        return out;
+    }
+
+    TEST_CASE("combat counts only after the enter delay") {
+        CombatDelay d;
+        CHECK_FALSE(run(d, true, 0.4f));
+        CHECK(run(d, true, 0.15f));
+    }
+
+    TEST_CASE("a short blip of combat never switches") {
+        CombatDelay d;
+        for (int i = 0; i < 10; ++i) {
+            CHECK_FALSE(run(d, true, 0.3f));
+            CHECK_FALSE(run(d, false, 0.3f));
+        }
+    }
+
+    TEST_CASE("combat ends only after the exit delay, and restarts the wait if it resumes") {
+        CombatDelay d;
+        run(d, true, 1.f);
+        CHECK(run(d, false, 1.9f));
+        CHECK(run(d, true, 0.1f));    // fight resumes within 2 s
+        CHECK(run(d, false, 1.9f));   // so the 2 s start over
+        CHECK_FALSE(run(d, false, 0.2f));
+    }
+
+    TEST_CASE("fade switches the view only when fully black, then clears") {
+        ViewFade f;
+        int frames = 0;
+        bool switched = false;
+        while (!switched && frames < 100) {
+            switched = f.update(true, true, kTick);
+            ++frames;
+            if (!switched) CHECK_FALSE(f.shown);
+        }
+        CHECK(switched);
+        CHECK(f.shown);
+        CHECK(f.alpha == Approx(1.f));
+        CHECK(frames * kTick == Approx(kViewFadeSec).epsilon(0.1));
+        for (int i = 0; i < 20; ++i) CHECK_FALSE(f.update(true, true, kTick));
+        CHECK(f.alpha == Approx(0.f));
+    }
+
+    TEST_CASE("fade that is called off before black clears without switching") {
+        ViewFade f;
+        f.update(true, true, kTick);
+        f.update(true, true, kTick);
+        CHECK(f.alpha > 0.f);
+        for (int i = 0; i < 20; ++i) CHECK_FALSE(f.update(false, true, kTick));
+        CHECK_FALSE(f.shown);
+        CHECK(f.alpha == Approx(0.f));
+    }
+
+    TEST_CASE("switch without fade is immediate and drops a running fade") {
+        ViewFade f;
+        f.update(true, true, kTick);
+        CHECK(f.update(true, false, kTick));
+        CHECK(f.shown);
+        CHECK(f.alpha == 0.f);
+        CHECK_FALSE(f.update(true, false, kTick));
+    }
+
+    TEST_CASE("angleDiffS wraps") {
+        CHECK(angleDiffS(0x100, 0x80) == 0x80);
+        CHECK(angleDiffS(-0x7F00, 0x7F00) == 0x200);
+        CHECK(angleDiffS(0x7F00, -0x7F00) == -0x200);
+    }
+
+    TEST_CASE("movement basis follows the wanted view when the stick is idle") {
+        MoveBasisHold h;
+        CHECK(h.update(false, 100, 900, false, 0) == 100);
+        CHECK(h.update(true, 100, 900, false, 0) == 900);
+        CHECK(h.update(true, 150, 950, false, 0) == 950);
+        CHECK(h.update(false, 150, 950, false, 0) == 150);
+    }
+
+    TEST_CASE("movement basis is held through a switch while the stick is held") {
+        MoveBasisHold h;
+        CHECK(h.update(false, 100, 900, true, 0) == 100);
+        CHECK(h.update(true, 120, 900, true, 0) == 100);       // switched: keep last basis
+        CHECK(h.update(true, 300, 1000, true, 0x1000) == 100); // stick moved 22.5 degrees: still held
+        CHECK(h.update(true, 300, 1000, true, 0x2100) == 1000); // past 45 degrees: let go
+    }
+
+    TEST_CASE("held movement basis is let go when the stick is released") {
+        MoveBasisHold h;
+        h.update(false, 100, 900, true, 0);
+        CHECK(h.update(true, 100, 900, true, 0) == 100);
+        CHECK(h.update(true, 100, 900, false, 0) == 900);
+        CHECK(h.update(true, 100, 900, true, 0) == 900);  // pushing again uses the camera
+    }
+
+    TEST_CASE("switching back while held keeps the same held basis") {
+        MoveBasisHold h;
+        h.update(false, 100, 900, true, 0);
+        h.update(true, 100, 900, true, 0);
+        CHECK(h.update(false, 500, 900, true, 0) == 100);
+        CHECK(h.update(false, 500, 900, false, 0) == 500);
+    }
+}

@@ -985,12 +985,70 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                     "<br/><b>Third Person:</b> the game's original third-person camera behind "
                     "Link.");
             });
+        config_bool_select(leftPane, rightPane, getSettings().game.vrThirdPersonInCombat,
+            {
+                .key = "Third Person in Combat",
+                .helpText = "In first person, switches to third person during fights, then back "
+                            "when the fight is over. Aiming without Z-targeting stays in first "
+                            "person. Off by default.",
+                .isDisabled = [] { return getSettings().game.vrThirdPerson.getValue(); },
+            });
+        // Third Person Movement is a Camera/Headset choice over
+        // game.vrThirdPersonCameraMovement (on = Camera).
+        leftPane.register_control(
+            leftPane.add_select_button({
+                .key = "Third Person Movement",
+                .getValue =
+                    [] {
+                        return getSettings().game.vrThirdPersonCameraMovement.getValue()
+                                   ? "Camera"
+                                   : "Headset";
+                    },
+                .isDisabled =
+                    [] {
+                        return !getSettings().game.vrThirdPerson.getValue() &&
+                               !getSettings().game.vrThirdPersonInCombat.getValue();
+                    },
+                .isModified =
+                    [] {
+                        return getSettings().game.vrThirdPersonCameraMovement.getValue() !=
+                               getSettings().game.vrThirdPersonCameraMovement.getDefaultValue();
+                    },
+            }),
+            rightPane, [](Pane& pane) {
+                constexpr std::array kBases = {"Camera", "Headset"};
+                for (int i = 0; i < 2; i++) {
+                    pane.add_button({
+                            .text = kBases[i],
+                            .isSelected =
+                                [i] {
+                                    return getSettings().game.vrThirdPersonCameraMovement
+                                               .getValue() == (i == 0);
+                                },
+                        })
+                        .on_pressed([i] {
+                            mDoAud_seStartMenu(kSoundItemChange);
+                            getSettings().game.vrThirdPersonCameraMovement.setValue(i == 0);
+                            config::save();
+                        });
+                }
+                pane.add_rml(
+                    "<br/>What the movement stick moves Link relative to in third person. "
+                    "Default: Camera."
+                    "<br/><br/><b>Camera:</b> forward is the way the camera faces; looking "
+                    "around doesn't steer Link."
+                    "<br/><b>Headset:</b> forward is wherever you look.");
+            });
         config_bool_select(leftPane, rightPane, getSettings().game.vrThirdPersonFollowCameraYaw,
             {
                 .key = "Turn With Game Camera",
                 .helpText = "In third person, your view turns when the game's camera swings "
                             "left or right, such as following Link as he runs. On by default.",
-                .isDisabled = [] { return !getSettings().game.vrThirdPerson.getValue(); },
+                .isDisabled =
+                    [] {
+                        return !getSettings().game.vrThirdPerson.getValue() &&
+                               !getSettings().game.vrThirdPersonInCombat.getValue();
+                    },
             });
         // Shown inverted over game.vrStableCamera: on = the original camera
         // that follows Link's animations, off (default) = steady camera.

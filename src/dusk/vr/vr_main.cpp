@@ -54,6 +54,8 @@
 #include "dusk/vr/vr_devtools_console.hpp"    // DUSK_VR_DEVTOOLS: test driver (scripted input, head lock)
 #include "d/actor/d_a_horse.h"                // daHorse_c -- horse turn follow
 #include "dusk/interp/frame_interpolation.h"   // sim_tick_seq/get_interpolation_step
+#include "dusk/vr/vr_math.hpp"                 // spec 11: CombatDelay, ViewFade, MoveBasisHold
+#include "Z2AudioLib/Z2SeqMgr.h"               // spec 11: battle/boss music as the combat signal
 
 // TEMP DIAGNOSTIC (VR black-screen-after-save investigation): plain,
 // unmangled, non-namespaced global mirroring g_renderedToHeadsetThisFrame
@@ -241,6 +243,10 @@ XrInstance g_xrInstance = XR_NULL_HANDLE;
 // g_hudSmoothedWorldForward) -- movement direction should track head
 // rotation immediately, not lag.
 s16 g_headMoveAngleS = 0;
+// Spec 11: the yaw the third-person view faces before the head's own
+// rotation is added (the smooth-turn yaw alone), same unit as
+// g_headMoveAngleS. The movement basis for Third Person Movement = Camera.
+s16 g_cameraMoveAngleS = 0;
 
 // Real right-controller-pointing aim yaw/pitch -- see getControllerAimAngles()'s
 // own declaration comment (vr_main.hpp). Computed once per frame in tick(),
@@ -655,6 +661,119 @@ s16 getHeadMoveAngleS() {
     return g_headMoveAngleS;
 }
 
+// Spec 11 items 10-13. Called once per sim tick from daAlink_c's movement
+// input, right after the stick is read.
+s16 getMoveBasisAngleS(daAlink_c* link, f32 stickValue, s16 stickAngle) {
+    static dusk::vr::math::MoveBasisHold s_hold;
+    const bool wantCamera = link != nullptr &&
+                            getSettings().game.vrThirdPersonCameraMovement.getValue() &&
+                            vr_link::isThirdPersonMode(link) && !vr_link::isFirstPerson(link) &&
+                            !vr_link::isWolfFirstPersonView(link);
+    return s_hold.update(wantCamera, g_headMoveAngleS, g_cameraMoveAngleS, stickValue > 0.05f,
+                         stickAngle);
+}
+
+bool isThirdPersonMode(daAlink_c* link) {
+    return vr_link::isThirdPersonMode(link);
+}
+
+// --- Spec 11: Third Person in Combat ---
+
+// Music that means Link is fighting: the regular battle music (a sub-BGM the
+// audio system starts when nearby enemies notice Link, Z2SoundObjMgr::
+// searchEnemy()) and the tracks that boss, miniboss, face-off and horseback
+// fights play instead of it. Naming the enum values means a wrong ID doesn't
+// compile.
+static constexpr u32 kCombatBgmIds[] = {
+    Z2BGM_BATTLE_NORMAL, Z2BGM_BATTLE_TWILIGHT,
+    Z2BGM_HORSE_BATTLE, Z2BGM_HORSE_BATTLE_D02,
+    Z2BGM_FACE_OFF_BATTLE, Z2BGM_FACE_OFF_BATTLE2, Z2BGM_FACE_OFF_BATTLE3,
+    Z2BGM_BOOMERAMG_MONKEY,                                          // Ook
+    Z2BGM_BOSSBABA_0, Z2BGM_BOSSBABA_1, Z2BGM_BOSSBABA_2,             // Diababa
+    Z2BGM_BOSSFIREMAN_0, Z2BGM_BOSSFIREMAN_1,                         // Fyrus
+    Z2BGM_BOSS_OCTAEEL_0, Z2BGM_BOSS_OCTAEEL_1,                       // Morpheel
+    Z2BGM_BOSS_OCTAEEL_D01, Z2BGM_BOSS_OCTAEEL_D02,
+    Z2BGM_HARAGIGANT_BTL01, Z2BGM_HARAGIGANT_BTL02,                   // Stallord
+    Z2BGM_BOSS_SNOWWOMAN_0, Z2BGM_BOSS_SNOWWOMAN_1, Z2BGM_BOSS_SNOWWOMAN_D1,  // Blizzeta
+    Z2BGM_GOMA_BTL01, Z2BGM_GOMA_BTL02,                               // Armogohma
+    Z2BGM_DRAGON_BTL01, Z2BGM_DRAGON_BTL02,                           // Argorok
+    Z2BGM_BOSS_ZANT,
+    Z2BGM_VS_GANON_01, Z2BGM_VS_GANON_02, Z2BGM_VS_GANON_04,
+    Z2BGM_YAMIMUSHI_B_D01,                                            // Twilit Bloat
+    Z2BGM_IB_MBOSS, Z2BGM_IB_MBOSS_D01, Z2BGM_TN_MBOSS, Z2BGM_TN_MBOSS_LV9,
+    Z2BGM_GG_MBOSS, Z2BGM_GG_MBOSS_D01,                               // minibosses
+};
+
+static bool isCombatBgm(u32 id) {
+    for (u32 combatId : kCombatBgmIds) {
+        if (id == combatId) return true;
+    }
+    return false;
+}
+
+static bool isCombatMusicPlaying() {
+    Z2SeqMgr* seq = Z2GetSeqMgr();
+    return seq != nullptr && (isCombatBgm(seq->getSubBgmID()) || isCombatBgm(seq->getMainBgmID()));
+}
+
+// The third-person view's base yaw: where the view faces with the head
+// level and straight ahead (smooth-turn yaw only).
+static s16 computeCameraMoveAngleS(const XrPosef& hmdPose) {
+    XrPosef levelPose = hmdPose;
+    levelPose.orientation = XrQuaternionf{0.f, 0.f, 0.f, 1.f};
+    const cXyz forward =
+        vr_render::computeHeadWorldForward(levelPose, dusk::vr::getSmoothTurnYawRad());
+    return cM_atan2s(forward.x, forward.z);
+}
+
+// Fade state; alpha is drawn by drawCutsceneFrameIfActive().
+static dusk::vr::math::ViewFade g_combatFade;
+
+// Once per frame, before anything reads isFirstPerson(): runs the combat
+// delays and the fade, and publishes the result as vr_link::g_combatThirdPerson.
+static void updateCombatCamera(float dtSec, const XrPosef& hmdPose) {
+    static dusk::vr::math::CombatDelay s_delay;
+    auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
+    const bool enabled = link != nullptr && getSettings().game.vrThirdPersonInCombat.getValue() &&
+                         !getSettings().game.vrThirdPerson.getValue();
+    if (!enabled) {
+        s_delay = {};
+        g_combatFade.update(false, false, dtSec);
+        vr_link::g_combatThirdPerson = false;
+        return;
+    }
+
+    const bool wanted = s_delay.update(isCombatMusicPlaying(), dtSec);
+    // Fade only when the switch would change what's on screen during play:
+    // events have their own camera rules (and fades), and the game's own
+    // first-person modes switch at once.
+    const bool allowFade = !link->checkEventRun() && !vr_link::isGameFirstPersonProc(link) &&
+                           !vr_link::isHookshotAirborneOrHanging(link);
+    const bool switched = g_combatFade.update(wanted, allowFade, dtSec);
+    vr_link::g_combatThirdPerson = g_combatFade.shown;
+
+    // Switching in while the view is black: turn the view so straight ahead
+    // looks from the game camera at Link, so he is in front of you and
+    // "forward" on the stick moves him away from the camera.
+    if (switched && allowFade && g_combatFade.shown) {
+        if (view_class* view = dComIfGd_getView()) {
+            const float dx = link->current.pos.x - view->lookat.eye.x;
+            const float dz = link->current.pos.z - view->lookat.eye.z;
+            if (std::abs(dx) > 0.001f || std::abs(dz) > 0.001f) {
+                const s16 gapS =
+                    static_cast<s16>(cM_atan2s(dx, dz) - computeCameraMoveAngleS(hmdPose));
+                dusk::vr::snapScriptedCameraYaw(cM_s2rad(gapS));
+            }
+        }
+    }
+}
+
+static void drawCombatFade() {
+    if (g_combatFade.alpha > 0.f && isEyePassOpen()) {
+        vr_render::drawViewFade(g_combatFade.alpha);
+    }
+}
+
 // Backing state for getVrLightingCamera() (vr_main.hpp). Updated once per
 // real frame in tick(), right after the camera eye anchor is computed.
 // kVrLightYawTimeConstantSec: how long the fill light takes to follow a new
@@ -701,6 +820,7 @@ void drawCutsceneFrameIfActive() {
     // TV mode: everything after the 3D scene (HUD, text boxes, menus) uses
     // the normal head view, unaffected by the TV view/zoom.
     vr_render::switchToOverlayView();
+    drawCombatFade();
 }
 
 bool getVrViewEye(float outEye[3]) {
@@ -2285,6 +2405,8 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     dusk::vr::g_smoothTurnYawRad -= dusk::vr::devtools::takeScriptedTurnRad();
 #endif
 
+    updateCombatCamera(static_cast<float>(pacing.dt), hmdPose);
+
     // --- Horse riding: turn the view with Epona (2026-09-29,
     // game.vrHorseTurnView, default on) ---
     // While riding, the left stick steers the horse, so without this the view
@@ -2368,7 +2490,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
         fopAc_ac_c* target = nullptr;
         if (dusk::getSettings().game.vrZTargetLockView.getValue() && link != nullptr &&
-            !dusk::getSettings().game.vrThirdPerson.getValue() && !link->checkEventRun() &&
+            !vr_link::isThirdPersonMode(link) && !link->checkEventRun() &&
             link->checkAttentionLock())
         {
             target = link->getAtnActor();
@@ -2446,11 +2568,11 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         }
 
         bool followActive = false;
-        if (dusk::getSettings().game.vrThirdPerson.getValue() &&
-            dusk::getSettings().game.vrThirdPersonFollowCameraYaw.getValue() &&
+        if (dusk::getSettings().game.vrThirdPersonFollowCameraYaw.getValue() &&
             !dusk::vr::isRealCutsceneRunning() && !dusk::vr::isHeadDrivenAimActive())
         {
-            if (auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer())) {
+            auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
+            if (link != nullptr && vr_link::isThirdPersonMode(link)) {
                 followActive = !dusk::vr::isVrFirstPerson(link);
             }
         }
@@ -2670,10 +2792,8 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         static float s_zTargetTrackElapsedSec = 0.f;
 
         bool zTargetActive = false;
-        if (dusk::getSettings().game.vrThirdPerson.getValue()) {
-            if (auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer())) {
-                zTargetActive = link->checkAttentionLock();
-            }
+        if (auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer())) {
+            zTargetActive = vr_link::isThirdPersonMode(link) && link->checkAttentionLock();
         }
 
         if (!zTargetActive) {
@@ -2746,6 +2866,8 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         const cXyz headForward =
             vr_render::computeHeadWorldForward(hmdPose, dusk::vr::getSmoothTurnYawRad());
         g_headMoveAngleS = cM_atan2s(headForward.x, headForward.z);
+        // Same, with the head's own rotation left out (spec 11).
+        g_cameraMoveAngleS = computeCameraMoveAngleS(hmdPose);
 
         // HMD-based aim pitch (see getHeadAimAngles()'s own comment,
         // vr_main.hpp) -- same horizontal-length/atan2s(y, horiz) shape and

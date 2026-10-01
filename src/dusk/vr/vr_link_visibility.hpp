@@ -902,7 +902,64 @@ inline bool isHookshotAirborneOrHanging(daAlink_c* link);
 inline bool isHookshotAiming(daAlink_c* link);
 inline bool isRealCutsceneRunning();
 
+// Spec 11 (Third Person in Combat): true while the combat third-person view
+// is switched in -- after the enter/exit delays, flipped on the fully-black
+// frame of the fade. Written once per frame by vr_main.cpp's tick()
+// (updateCombatCamera()); read here so every caller of isFirstPerson() sees
+// the same answer for the whole frame.
+inline bool g_combatThirdPerson = false;
+
+// The game's own first-person modes: item aiming without Z-targeting (each
+// *_SUBJECT proc; with Z-targeting the game picks the *_MOVE procs instead,
+// d_a_alink_bow.inc etc.) and the look-around views (*_SUBJECTIVITY).
+inline bool isGameFirstPersonProc(daAlink_c* link) {
+    if (!link) return false;
+    switch (link->mProcID) {
+        case daAlink_c::PROC_BOW_SUBJECT:
+        case daAlink_c::PROC_BOOMERANG_SUBJECT:
+        case daAlink_c::PROC_COPY_ROD_SUBJECT:
+        case daAlink_c::PROC_HAWK_SUBJECT:
+        case daAlink_c::PROC_HOOKSHOT_SUBJECT:
+        case daAlink_c::PROC_IRON_BALL_SUBJECT:
+        case daAlink_c::PROC_HORSE_BOW_SUBJECT:
+        case daAlink_c::PROC_HORSE_BOOMERANG_SUBJECT:
+        case daAlink_c::PROC_HORSE_HOOKSHOT_SUBJECT:
+        case daAlink_c::PROC_CANOE_BOW_SUBJECT:
+        case daAlink_c::PROC_CANOE_BOOMERANG_SUBJECT:
+        case daAlink_c::PROC_CANOE_HOOKSHOT_SUBJECT:
+        case daAlink_c::PROC_SWIM_HOOKSHOT_SUBJECT:
+        case daAlink_c::PROC_SUBJECTIVITY:
+        case daAlink_c::PROC_SWIM_SUBJECTIVITY:
+        case daAlink_c::PROC_PEEP_SUBJECTIVITY:
+        case daAlink_c::PROC_HORSE_SUBJECTIVITY:
+        case daAlink_c::PROC_CANOE_SUBJECTIVITY:
+        case daAlink_c::PROC_BOARD_SUBJECTIVITY:
+        case daAlink_c::PROC_WOLF_ROPE_SUBJECTIVITY:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Spec 11: the combat third-person view applies right now -- switched in,
+// ordinary gameplay (events keep their own rules), and not in one of the
+// game's first-person modes (those switch back at once, no fade). Clawshot
+// flight/hanging stays first person too, same as the Third Person choice
+// (see isFirstPerson()'s clawshot carve-out).
+inline bool isCombatThirdPersonView(daAlink_c* link) {
+    return g_combatThirdPerson && link && !link->checkEventRun() &&
+           !isGameFirstPersonProc(link) && !isHookshotAirborneOrHanging(link);
+}
+
+// Third-person view from either source: the Third Person choice, or the
+// combat switch. For the checks that used to read game.vrThirdPerson alone
+// (body visibility, Turn With Game Camera, third-person Z-target tracking).
+inline bool isThirdPersonMode(daAlink_c* link) {
+    return dusk::getSettings().game.vrThirdPerson.getValue() || isCombatThirdPersonView(link);
+}
+
 inline bool isFirstPerson(daAlink_c* link) {
+    if (isCombatThirdPersonView(link)) return false;
     if (!link || link->checkWolf()) return false;
 
     // "Third Person" VR setting (added 2026-08-18, explicit user request:
@@ -1031,6 +1088,7 @@ inline bool isFirstPerson(daAlink_c* link) {
 inline bool isWolfFirstPersonView(daAlink_c* link) {
     if (!link || !link->checkWolf()) return false;
     if (dusk::getSettings().game.vrThirdPerson.getValue()) return false;
+    if (isCombatThirdPersonView(link)) return false;
     if (link->checkEventRun()) return false;
     return true;
 }

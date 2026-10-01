@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstdlib>
 
 namespace dusk::vr::math {
 
@@ -179,5 +181,103 @@ inline PanelSize panelFromDiagonal(float diagonal, float heightOverWidth) {
     const float width = diagonal / std::sqrt(1.f + heightOverWidth * heightOverWidth);
     return PanelSize{width, width * heightOverWidth};
 }
+
+// ---------------------------------------------------------------------------
+// Combat camera and third-person movement (spec 11)
+// ---------------------------------------------------------------------------
+
+inline constexpr float kCombatEnterDelaySec = 0.5f;
+inline constexpr float kCombatExitDelaySec = 2.0f;
+inline constexpr float kViewFadeSec = 0.15f;
+// How far (s16 binary angle) the stick may move from where it was at a view
+// switch before the held movement basis is let go: 45 degrees.
+inline constexpr int kMoveBasisHoldReleaseS = 0x2000;
+
+// Combat as the camera sees it: the raw signal has to hold for the enter
+// delay before it counts, and has to be gone for the exit delay before it
+// stops counting. A blip back to the current state restarts the timer.
+struct CombatDelay {
+    bool active = false;
+    float timerSec = 0.f;
+
+    bool update(bool combatNow, float dtSec) {
+        if (combatNow == active) {
+            timerSec = 0.f;
+            return active;
+        }
+        timerSec += dtSec;
+        if (timerSec >= (active ? kCombatExitDelaySec : kCombatEnterDelaySec)) {
+            active = combatNow;
+            timerSec = 0.f;
+        }
+        return active;
+    }
+};
+
+// Fade to black around a view switch. `shown` is the view the camera uses;
+// it only changes to `wanted` on the frame the fade is fully black, then the
+// fade clears again. If `wanted` flips back during the fade-out, the fade
+// just clears without switching. With allowFade false the view switches at
+// once and any fade is dropped.
+struct ViewFade {
+    bool shown = false;
+    float alpha = 0.f;  // 0 = clear, 1 = black
+
+    // Returns true on the frame the view switched.
+    bool update(bool wanted, bool allowFade, float dtSec) {
+        if (!allowFade) {
+            const bool switched = shown != wanted;
+            shown = wanted;
+            alpha = 0.f;
+            return switched;
+        }
+        const float step = dtSec / kViewFadeSec;
+        if (wanted != shown) {
+            alpha = std::min(1.f, alpha + step);
+            if (alpha >= 1.f) {
+                shown = wanted;
+                return true;
+            }
+        } else {
+            alpha = std::max(0.f, alpha - step);
+        }
+        return false;
+    }
+};
+
+// Signed difference a - b of two s16 binary angles, in [-32768, 32767].
+inline int angleDiffS(int16_t a, int16_t b) {
+    return static_cast<int16_t>(static_cast<uint16_t>(a) - static_cast<uint16_t>(b));
+}
+
+// Which yaw the movement stick is relative to: the headset's, or the
+// third-person camera's. When that choice changes while the stick is held,
+// the last basis is kept (frozen) so Link keeps his heading, until the stick
+// is released or turns more than kMoveBasisHoldReleaseS from where it was.
+struct MoveBasisHold {
+    bool valid = false;
+    bool lastWantCamera = false;
+    bool holding = false;
+    int16_t lastBasis = 0;
+    int16_t heldBasis = 0;
+    int16_t heldStick = 0;
+
+    int16_t update(bool wantCamera, int16_t headBasis, int16_t cameraBasis, bool stickHeld,
+                   int16_t stickAngle) {
+        if (valid && wantCamera != lastWantCamera && stickHeld && !holding) {
+            holding = true;
+            heldBasis = lastBasis;
+            heldStick = stickAngle;
+        }
+        valid = true;
+        lastWantCamera = wantCamera;
+        if (holding &&
+            (!stickHeld || std::abs(angleDiffS(stickAngle, heldStick)) > kMoveBasisHoldReleaseS)) {
+            holding = false;
+        }
+        lastBasis = holding ? heldBasis : (wantCamera ? cameraBasis : headBasis);
+        return lastBasis;
+    }
+};
 
 }  // namespace dusk::vr::math

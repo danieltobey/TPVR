@@ -1870,6 +1870,50 @@ inline void drawCutsceneFrame(const CutsceneFrame& frame) {
     GXEnd();
 }
 
+// Spec 11: darkens the whole view toward black (alpha 0 = clear, 1 = black)
+// for the combat camera's fade. Drawn after the 3D scene and before the HUD,
+// so the HUD stays visible. One quad in view space just past the near plane,
+// wide enough to cover any eye's field of view; depth test off.
+inline void drawViewFade(float alpha) {
+    view_class* view = dComIfGd_getView();
+    if (view == nullptr) return;
+    const u8 a = static_cast<u8>(std::clamp(alpha, 0.f, 1.f) * 255.f + 0.5f);
+    if (a == 0) return;
+
+    const float z = std::max(view->near_, 1.f) * 4.f;
+    const float half = z * 50.f;
+
+    GXSetProjection(view->projMtx, GX_PERSPECTIVE);
+    GXLoadPosMtxImm(cMtx_getIdentity(), GX_PNMTX0);
+    GXSetCurrentMtx(0);
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetNumChans(1);
+    GXSetChanCtrl(GX_COLOR0A0, GX_DISABLE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_CLAMP, GX_AF_NONE);
+    GXSetNumTexGens(0);
+    GXSetNumTevStages(1);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+    GXSetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
+    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
+    GXSetZMode(GX_DISABLE, GX_ALWAYS, GX_FALSE);
+    GXSetCullMode(GX_CULL_NONE);
+    GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_OR, GX_ALWAYS, 0);
+
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    GXPosition3f32(-half, -half, -z);
+    GXColor4u8(0, 0, 0, a);
+    GXPosition3f32(half, -half, -z);
+    GXColor4u8(0, 0, 0, a);
+    GXPosition3f32(half, half, -z);
+    GXColor4u8(0, 0, 0, a);
+    GXPosition3f32(-half, half, -z);
+    GXColor4u8(0, 0, 0, a);
+    GXEnd();
+}
+
 struct HandPayload {
     XrPosef controllerPose;   // grip space pose from xrLocateSpaces
     float   scale = 1.0f;     // uniform scale for the hand mesh

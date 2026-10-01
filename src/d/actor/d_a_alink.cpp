@@ -9710,7 +9710,8 @@ void daAlink_c::setStickData() {
         // vr_stereo_render.hpp) -- so this is a straight substitution, not
         // an addition on top of it.
         if (dusk::vr::isRenderingToHeadset()) {
-            mMoveAngle = mStickAngle + dusk::vr::getHeadMoveAngleS();
+            // Spec 11: camera-relative in third person (Third Person Movement).
+            mMoveAngle = mStickAngle + dusk::vr::getMoveBasisAngleS(this, mStickValue, mStickAngle);
         } else {
             mMoveAngle = mStickAngle + dCam_getControledAngleY(dComIfGp_getCamera(field_0x317c));
         }
@@ -20285,7 +20286,7 @@ int daAlink_c::draw() {
         // -- same underlying mechanism, just flipped sense and default.
         const BOOL hideBodyForVr = dusk::vr::isRenderingToHeadset() &&
                                     !dusk::getSettings().game.vrShowBody.getValue() &&
-                                    !dusk::getSettings().game.vrThirdPerson.getValue() &&
+                                    !dusk::vr::isThirdPersonMode(this) &&
                                     !dusk::vr::isRealCutsceneRunning();
         modelDraw(mpLinkModel, isPlayerNoDraw || hideBodyForVr);
 
