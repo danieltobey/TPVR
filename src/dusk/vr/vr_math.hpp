@@ -153,6 +153,14 @@ inline float tvScreenTanHalfFovy(float diagCm, float distCm, float aspect) {
     return (heightCm * 0.5f) / dist;
 }
 
+// Pitch (radians, positive = up) that moves the TV's centre by heightPercent
+// (clamped to [-50, 50]) of the screen's own height, for a screen whose
+// half-height subtends atan(screenTanHalfFovy). Independent of distance.
+inline float tvHeightPitch(float heightPercent, float screenTanHalfFovy) {
+    const float share = std::clamp(heightPercent, -50.f, 50.f) / 100.f;
+    return std::atan(share * 2.f * screenTanHalfFovy);
+}
+
 // Projection zoom so a camera with vertical fov camFovyDeg (clamped to
 // [5, 150]) exactly fills a screen whose half-height subtends
 // atan(screenTanHalfFovy).

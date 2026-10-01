@@ -256,6 +256,9 @@ inline float tvScreenTanHalfFovy(float aspect) {
                                                aspect);
 }
 inline float g_tvZoom = 1.f;
+// TV Height (game.vrTvHeight): pitch (radians, + = up) applied on top of the
+// smoothed head-forward when placing the TV; see buildEyeViewMtx().
+inline float g_tvHeightPitch = 0.f;
 
 // Overlays (HUD billboard, text boxes, Dusklight menu) are positioned
 // relative to the head, so in TV mode they must be drawn with the NORMAL
@@ -324,8 +327,20 @@ inline void buildEyeViewMtx(Mtx dest, const XrPosef& pose, const XrVector3f& hmd
     // orientation. D maps the TV/camera frame (x right, y up, z back) into
     // the head's view frame; applied on the left of the camera view.
     {
-        const XrVector3f dS = rotateByQuatInverse(pose.orientation, g_tvSmoothedFwdXr);
+        XrVector3f dS = rotateByQuatInverse(pose.orientation, g_tvSmoothedFwdXr);
         const XrVector3f upH = rotateByQuatInverse(pose.orientation, XrVector3f{0.f, 1.f, 0.f});
+        // TV Height: tilt the centre direction up/down by g_tvHeightPitch
+        // towards real-world up (upH made perpendicular to dS).
+        if (g_tvHeightPitch != 0.f) {
+            const float k = upH.x * dS.x + upH.y * dS.y + upH.z * dS.z;
+            float ux = upH.x - dS.x * k, uy = upH.y - dS.y * k, uz = upH.z - dS.z * k;
+            const float ul = std::sqrt(ux * ux + uy * uy + uz * uz);
+            if (ul > 1e-4f) {
+                ux /= ul; uy /= ul; uz /= ul;
+                const float c = std::cos(g_tvHeightPitch), sn = std::sin(g_tvHeightPitch);
+                dS = XrVector3f{dS.x * c + ux * sn, dS.y * c + uy * sn, dS.z * c + uz * sn};
+            }
+        }
         float zx = -dS.x, zy = -dS.y, zz = -dS.z;  // back axis
         float zl = std::sqrt(zx * zx + zy * zy + zz * zz);
         const float d = upH.x * zx + upH.y * zy + upH.z * zz;

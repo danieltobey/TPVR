@@ -1137,6 +1137,12 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             100, 1000, 50,
             [] { return getSettings().game.vrCutsceneView.getValue() != VrCutsceneView::Tv; },
             {}, " cm");
+        config_int_select(leftPane, rightPane, getSettings().game.vrTvHeight,
+            "TV Height",
+            "Moves the TV screen up or down, as a share of its height. Default: -20%.",
+            -50, 50, 5,
+            [] { return getSettings().game.vrCutsceneView.getValue() != VrCutsceneView::Tv; },
+            {}, "%");
         config_bool_select(leftPane, rightPane, getSettings().game.vrCutsceneFaceCamera,
             {
                 .key = "Face Cutscene Camera",

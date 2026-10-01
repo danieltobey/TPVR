@@ -597,6 +597,7 @@ struct UserSettings {
         ConfigVar<int> vrHudSize;
         ConfigVar<int> vrTvSize;
         ConfigVar<int> vrTvDistance;
+        ConfigVar<int> vrTvHeight;
 
         // Audio
         ConfigVar<bool> noLowHpSound;

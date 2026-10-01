@@ -176,6 +176,7 @@ UserSettings g_userSettings = {
         .vrHudSize {"game.vrHudDiagonal", 93},
         .vrTvSize {"game.vrTvDiagonal", 760},
         .vrTvDistance {"game.vrTvDistance", 500},
+        .vrTvHeight {"game.vrTvHeight", -20},
 
         // Audio
         .noLowHpSound {"game.noLowHpSound", false},
@@ -461,6 +462,7 @@ void registerSettings() {
     Register(g_userSettings.game.vrHudSize);
     Register(g_userSettings.game.vrTvSize);
     Register(g_userSettings.game.vrTvDistance);
+    Register(g_userSettings.game.vrTvHeight);
     Register(g_userSettings.game.enableFastIronBoots);
     Register(g_userSettings.game.canTransformAnywhere);
     Register(g_userSettings.game.fastRoll);

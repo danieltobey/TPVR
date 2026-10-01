@@ -187,6 +187,23 @@ TEST_SUITE("panels") {
         CHECK(std::isfinite(tvScreenTanHalfFovy(760.f, 0.f, 16.f / 9.f)));
     }
 
+    TEST_CASE("TV height: default -20% at default size is ~8.5 degrees down") {
+        const float t = tvScreenTanHalfFovy(760.f, 500.f, 16.f / 9.f);
+        CHECK(deg(tvHeightPitch(-20.f, t)) == Approx(-8.47f).epsilon(0.01));
+        CHECK(tvHeightPitch(0.f, t) == Approx(0.f));
+        CHECK(tvHeightPitch(30.f, t) == Approx(-tvHeightPitch(-30.f, t)));
+    }
+
+    TEST_CASE("TV height: same share of the screen at any distance, clamped to +/-50%") {
+        const float near = tvScreenTanHalfFovy(760.f, 500.f, 16.f / 9.f);
+        const float far = tvScreenTanHalfFovy(760.f, 1000.f, 16.f / 9.f);
+        // Offset in cm at the screen = distance * tan(pitch) = share * screen height.
+        CHECK(500.f * std::tan(tvHeightPitch(-20.f, near)) == Approx(-0.2f * 2.f * near * 500.f));
+        CHECK(1000.f * std::tan(tvHeightPitch(-20.f, far)) == Approx(-0.2f * 2.f * far * 1000.f));
+        CHECK(tvHeightPitch(-90.f, near) == Approx(tvHeightPitch(-50.f, near)));
+        CHECK(tvHeightPitch(90.f, near) == Approx(tvHeightPitch(50.f, near)));
+    }
+
     TEST_CASE("TV zoom is 1 when the camera fov matches the screen") {
         const float t = tvScreenTanHalfFovy(760.f, 500.f, 16.f / 9.f);
         const float screenFovyDeg = 2.f * deg(std::atan(t));
