@@ -1,6 +1,6 @@
 # 10 Dev tooling
 
-**Status:** Phase 1 🟡 Built: screenshot ✅, live mirror ✅, keep-awake awaiting the 30-minute check. Phase 2: remote console ✅, test driver ✅, unit tests 🟡 (host checks ✅; headset: TV, HUD, crawl/swim ✅, horse and fill light pending); CI ✅. Phase 3 📝 Approved (details approved 2026-10-01), in progress.
+**Status:** Phase 1 🟡 Built: screenshot ✅, live mirror ✅, keep-awake awaiting the 30-minute check. Phase 2: remote console ✅, test driver ✅, unit tests 🟡 (host checks ✅; headset: TV, HUD, crawl/swim ✅, horse and fill light pending); CI ✅. Phase 3 🟡 Built (2026-10-01), headset checks pending; viewer and ndk-stack checked on the PC.
 
 ## Problem
 Development depends on the tester relaying what they see, and on a headset connection that drops whenever the Quest sleeps (stale Wi-Fi adb, interrupted installs). Changes can't be checked without someone wearing the headset, the Windows build is never compiled, and there's no fast way to catch regressions in the maths or to profile performance.
