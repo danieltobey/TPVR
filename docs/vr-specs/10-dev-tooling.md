@@ -10,7 +10,7 @@ Tooling for the dev environment in `~/Documents/TPVR-dev` and debug-only code in
 
 ## Phase 1: Headset access
 
-1. **Keep awake.** `tools/headset.sh awake|normal` sends the Quest proximity-sensor override (`com.oculus.vrpowermanager.prox_close`) and restores it (`automation_disable`). While "awake", the headset doesn't sleep and apps keep running off-head. `install.sh` applies it automatically before installing.
+1. **Keep awake.** `tools/headset.sh awake|normal` sends the Quest proximity-sensor override (`com.oculus.vrpowermanager.prox_close`) and restores it (`automation_disable`). While "awake", the headset doesn't sleep and apps keep running off-head. Since 2026-10-01 the tools no longer apply it: they connect with `normal` (which also clears a leftover override), so the headset sleeps as usual and saves battery; Daniel turns it on when a build is ready. `awake` is for long off-head runs, by hand.
 2. **Live mirror.** scrcpy (latest, Homebrew on the host; the container can't use the host GPU driver) launched with `tools/mirror.sh`, using the Android SDK's adb, to show the headset's view in a window on the PC.
 3. **In-game screenshot.** A debug command, triggered from the PC, makes the game write the next rendered frame of each eye as PNGs to its app storage; `tools/screenshot.sh [name]` triggers it, pulls the files into `logs/shots/` and prints their paths. It captures exactly what the renderer drew, independent of the system compositor.
    - Trigger mechanism: the game checks a trigger file in its app storage once per second (no Android intent plumbing needed).
