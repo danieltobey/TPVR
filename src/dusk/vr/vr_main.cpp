@@ -50,6 +50,7 @@
 #include "dusk/vr/vr_menu_gamepad.hpp"          // dusk::vr::ensureVrMenuGamepadAttached, etc.
 #include "dusk/vr/vr_main.hpp"
 #include "dusk/vr/vr_devtools.hpp"            // DUSK_VR_DEVTOOLS: screenshots etc.
+#include <tracy/Tracy.hpp>                     // VR zones (spec 10, item 8); nothing unless TRACY_ENABLE
 #include "dusk/vr/vr_devtools_console.hpp"    // DUSK_VR_DEVTOOLS: test driver (scripted input, head lock)
 #include "d/actor/d_a_horse.h"                // daHorse_c -- horse turn follow
 #include "dusk/interp/frame_interpolation.h"   // sim_tick_seq/get_interpolation_step
@@ -1506,6 +1507,7 @@ static bool spaceWarpEncodeFrame(const vr_render::StereoParams& sp, const aurora
 }  // namespace
 
 void tick(const dusk::game_clock::FrameTiming& pacing) {
+    ZoneScopedN("VR tick");
     g_perfTickStart = PerfClock::now();
     g_perfAfterAcquire = g_perfTickStart;
     g_perfTickEnd = g_perfTickStart;
@@ -1667,7 +1669,12 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
     XrFrameState frameState{XR_TYPE_FRAME_STATE};
     g_perfMark = PerfClock::now();
-    if (XR_FAILED(xrWaitFrame(g_session->session(), &waitInfo, &frameState))) {
+    XrResult waitResult;
+    {
+        ZoneScopedN("VR xrWaitFrame");
+        waitResult = xrWaitFrame(g_session->session(), &waitInfo, &frameState);
+    }
+    if (XR_FAILED(waitResult)) {
         logTickReasonOnChange("xrWaitFrame-failed");
         duskVrLog("[dusk::vr::tick] FAILED: xrWaitFrame\n");
         return;
@@ -1687,7 +1694,12 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
     g_perfWaitFrameMs = perfMs(g_perfMark, PerfClock::now());
     g_perfMidMark = PerfClock::now();
-    if (XR_FAILED(xrBeginFrame(g_session->session(), &beginInfo))) {
+    XrResult beginResult;
+    {
+        ZoneScopedN("VR xrBeginFrame");
+        beginResult = xrBeginFrame(g_session->session(), &beginInfo);
+    }
+    if (XR_FAILED(beginResult)) {
         logTickReasonOnChange("xrBeginFrame-failed");
         duskVrLog("[dusk::vr::tick] FAILED: xrBeginFrame\n");
         return;
@@ -3085,7 +3097,10 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     // traversal to do) -- under 2-4% of a single frame's budget even at the
     // worst observed moment against a 72-90Hz VR target. Not a measurable
     // perf concern; not worth optimizing further absent new evidence.
-    fpcM_DrawIterater((fpcM_DrawIteraterFunc)fpcM_Draw);
+    {
+        ZoneScopedN("VR draw HUD pass");
+        fpcM_DrawIterater((fpcM_DrawIteraterFunc)fpcM_Draw);
+    }
 
     // Capture the flat 2D HUD into a shared offscreen texture ONCE, before
     // either eye's protected offscreen pass opens (see captureHudBillboard()'s
@@ -3170,6 +3185,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     // against the head-center view and get their disparity from the
     // shader's per-eye correction.
     if (dusk::getSettings().game.vrSinglePassStereo && viewCount == 2) {
+        ZoneScopedN("VR draw both eyes");
         const uint32_t eyeWidth = g_eyeImageWidth;
         const uint32_t eyeHeight = g_eyeImageHeight;
         vr_render::StereoParams stereoParams{
@@ -3294,6 +3310,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         }
     } else
     for (uint32_t eye = 0; eye < viewCount; ++eye) {
+        ZoneScopedN("VR draw eye");
         vr_render::EyeParams eyeParams{
             views[eye].pose,
             views[eye].fov,
@@ -3560,6 +3577,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
 // xrEndFrame with an empty layer list and returned early), g_hasPendingFrameSubmit
 // stays false and this is a no-op.
 void submitFrame() {
+    ZoneScopedN("VR submit frame");
     if (!g_hasPendingFrameSubmit) {
         return;
     }
@@ -3689,7 +3707,12 @@ void submitFrame() {
     endInfo.layerCount = 1;
     endInfo.layers = layers;
 
-    if (XR_FAILED(xrEndFrame(g_session->session(), &endInfo))) {
+    XrResult endResult;
+    {
+        ZoneScopedN("VR xrEndFrame");
+        endResult = xrEndFrame(g_session->session(), &endInfo);
+    }
+    if (XR_FAILED(endResult)) {
         duskVrLog("[dusk::vr::submitFrame] FAILED: xrEndFrame\n");
     }
 
