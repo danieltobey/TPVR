@@ -1126,20 +1126,20 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             });
         config_int_select(leftPane, rightPane, getSettings().game.vrTvSize,
             "TV Size",
-            "The screen's size in TV mode, measured diagonally. Default: 760 cm.",
+            "The screen's size in TV mode, measured diagonally. Default: 660 cm.",
             100, 2400, 20,
             [] { return getSettings().game.vrCutsceneView.getValue() != VrCutsceneView::Tv; },
             {}, " cm");
         config_int_select(leftPane, rightPane, getSettings().game.vrTvDistance,
             "TV Distance",
             "How far away the TV screen is (the scene inside keeps its own depth). "
-            "Default: 500 cm.",
+            "Default: 550 cm.",
             100, 1000, 50,
             [] { return getSettings().game.vrCutsceneView.getValue() != VrCutsceneView::Tv; },
             {}, " cm");
         config_int_select(leftPane, rightPane, getSettings().game.vrTvHeight,
             "TV Height",
-            "Moves the TV screen up or down, as a share of its height. Default: -20%.",
+            "Moves the TV screen up or down, as a share of its height. Default: -10%.",
             -50, 50, 5,
             [] { return getSettings().game.vrCutsceneView.getValue() != VrCutsceneView::Tv; },
             {}, "%");

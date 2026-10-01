@@ -247,8 +247,8 @@ inline cXyz g_tvCenter;
 // Screen size from game.vrTvSize (diagonal, cm) / game.vrTvDistance (cm),
 // like a real TV: height = diagonal / sqrt(1 + aspect^2) (the cutscene
 // camera's aspect), and the half-angle it subtends at that distance.
-// Defaults (760 cm diagonal at 500 cm, 16:9) match the earlier fixed
-// ~40.9-degree-tall screen.
+// Defaults (660 cm diagonal at 550 cm, 16:9; 2026-10-01, Daniel's headset
+// values) give a ~32.8-degree-tall screen (was 760 at 500, ~40.9 degrees).
 inline float tvScreenTanHalfFovy(float aspect) {
     const auto& game = dusk::getSettings().game;
     return dusk::vr::math::tvScreenTanHalfFovy(static_cast<float>(game.vrTvSize.getValue()),

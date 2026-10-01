@@ -174,9 +174,9 @@ UserSettings g_userSettings = {
         .vrCutsceneView {"game.vrCutsceneView", VrCutsceneView::Window},
         .vrHudDistance {"game.vrHudDistance", 90},
         .vrHudSize {"game.vrHudDiagonal", 93},
-        .vrTvSize {"game.vrTvDiagonal", 760},
-        .vrTvDistance {"game.vrTvDistance", 500},
-        .vrTvHeight {"game.vrTvHeight", -20},
+        .vrTvSize {"game.vrTvDiagonal", 660},
+        .vrTvDistance {"game.vrTvDistance", 550},
+        .vrTvHeight {"game.vrTvHeight", -10},
 
         // Audio
         .noLowHpSound {"game.noLowHpSound", false},

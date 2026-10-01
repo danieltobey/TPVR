@@ -20,9 +20,9 @@
 | Setting | Values | Default |
 |---|---|---|
 | Cutscene View | Full / Window / TV | Window |
-| TV Size (diagonal) | 100–2400 cm | 760 cm |
-| TV Distance | 100–1000 cm | 500 cm |
-| TV Height | −50% to +50% of screen height, steps of 5% | −20% |
+| TV Size (diagonal) | 100–2400 cm | 660 cm (was 760 until 2026-10-01) |
+| TV Distance | 100–1000 cm | 550 cm (was 500 until 2026-10-01) |
+| TV Height | −50% to +50% of screen height, steps of 5% | −10% |
 | Face Cutscene Camera | On / Off | On |
 | Follow Cutscene Camera Turns | On / Off | On |
 | First-Person Cutscenes (Experimental) | On / Off | Off |
@@ -32,4 +32,4 @@
 - Window: outside the frame is black, text boxes stay visible. ✅
 - TV: constant screen size across close-ups and wide shots, trails fast head turns and settles, stays level, stereo comfortable, HUD unaffected. ✅
 - TV Size / Distance change the screen as a real screen would. 🟡
-- TV Height: the default sits visibly lower than before (centre 20% of the screen's height below where you look); −50% / +50% move it clearly down / up; 0% matches the old position; the TV still follows head turns and tilts and settles as before. 🟡 Host unit test for the offset angle. 🟡
+- TV Height: the default sits lower than before (centre 10% of the screen's height below where you look); −50% / +50% move it clearly down / up; 0% matches the old position; the TV still follows head turns and tilts and settles as before. 🟡 Host unit test for the offset angle. 🟡

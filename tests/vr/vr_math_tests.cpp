@@ -170,9 +170,9 @@ TEST_SUITE("horse steering") {
 }
 
 TEST_SUITE("panels") {
-    TEST_CASE("TV defaults: 760 cm diagonal at 500 cm, 16:9 is ~40.9 degrees tall") {
-        const float t = tvScreenTanHalfFovy(760.f, 500.f, 16.f / 9.f);
-        CHECK(2.f * deg(std::atan(t)) == Approx(40.9f).epsilon(0.005));
+    TEST_CASE("TV defaults: 660 cm diagonal at 550 cm, 16:9 is ~32.8 degrees tall") {
+        const float t = tvScreenTanHalfFovy(660.f, 550.f, 16.f / 9.f);
+        CHECK(2.f * deg(std::atan(t)) == Approx(32.8f).epsilon(0.005));
     }
 
     TEST_CASE("TV screen: twice as far looks half as tall") {
@@ -187,9 +187,9 @@ TEST_SUITE("panels") {
         CHECK(std::isfinite(tvScreenTanHalfFovy(760.f, 0.f, 16.f / 9.f)));
     }
 
-    TEST_CASE("TV height: default -20% at default size is ~8.5 degrees down") {
-        const float t = tvScreenTanHalfFovy(760.f, 500.f, 16.f / 9.f);
-        CHECK(deg(tvHeightPitch(-20.f, t)) == Approx(-8.47f).epsilon(0.01));
+    TEST_CASE("TV height: default -10% at default size is ~3.4 degrees down") {
+        const float t = tvScreenTanHalfFovy(660.f, 550.f, 16.f / 9.f);
+        CHECK(deg(tvHeightPitch(-10.f, t)) == Approx(-3.37f).epsilon(0.01));
         CHECK(tvHeightPitch(0.f, t) == Approx(0.f));
         CHECK(tvHeightPitch(30.f, t) == Approx(-tvHeightPitch(-30.f, t)));
     }
