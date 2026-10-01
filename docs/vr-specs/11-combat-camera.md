@@ -23,9 +23,9 @@ Separately, in third person Link moves relative to the headset: "forward" on the
 9. With Third Person in Combat off, First Person behaves exactly as it does now.
 
 ### Movement in third person
-10. Whenever the third-person view is in use during gameplay (the Third Person choice, or a combat switch), the movement stick is relative to the **camera**, not the headset. "Camera" means the direction the third-person view faces before your head's own rotation is added: the smooth-turn yaw, which already follows the game camera when Turn With Game Camera is on. With the camera behind Link, pushing forward moves him away from you. Turning your head without moving the camera doesn't change his direction.
+10. A new setting, **Third Person Movement**, chooses what the movement stick is relative to while the third-person view is in use during gameplay (the Third Person choice, or a combat switch): **Camera** (default) or **Headset** (today's behaviour). With Camera, the stick is relative to the camera, not the headset. "Camera" means the direction the third-person view faces before your head's own rotation is added: the smooth-turn yaw, which already follows the game camera when Turn With Game Camera is on. With the camera behind Link, pushing forward moves him away from you. Turning your head without moving the camera doesn't change his direction.
 11. First person keeps headset-relative movement, unchanged. So does wolf form in first person (its view is head-based).
-12. **Switching mid-run:** when the view switches while the stick is held, Link keeps going the way he was going. The old direction basis stays in use until the stick is released or moves more than 45° from where it was at the switch, then the new basis takes over. This stops a fade from swinging Link round mid-fight.
+12. **Switching mid-run:** when Third Person Movement is Camera and the view switches while the stick is held, Link keeps going the way he was going. The old direction basis stays in use until the stick is released or moves more than 45° from where it was at the switch, then the new basis takes over. This stops a fade from swinging Link round mid-fight.
 13. Z-targeting, riding (horse/canoe/board), swimming, and Iron Boots on walls keep their own movement rules. Rule 10 only replaces the basis that the stick angle is added to.
 
 ## Settings
@@ -33,8 +33,11 @@ Separately, in third person Link moves relative to the headset: "forward" on the
 |---|---|---|
 | Perspective | First Person / Third Person | First Person (unchanged) |
 | Third Person in Combat (first person only) | On / Off | Off |
+| Third Person Movement (Third Person, or Third Person in Combat on) | Camera / Headset | Camera |
 
-Stored as `game.vrThirdPersonInCombat` (bool). Its description: "Switches to third person during fights, then back. Default off." Off by default so the current behaviour doesn't change for anyone who doesn't turn it on. The delays and fade times are constants (0.5 s, 2 s, 0.15 s), not settings. They can be made into settings later if they need tuning.
+Stored as `game.vrThirdPersonInCombat` (bool). Its description: "Switches to third person during fights, then back. Default off." Off by default so the current behaviour doesn't change for anyone who doesn't turn it on. Third Person Movement is stored as `game.vrThirdPersonCameraMovement` (bool, on = Camera). Its description: "What the stick moves Link relative to in third person. Default Camera." It is greyed out unless Perspective is Third Person or Third Person in Combat is on. Default Camera, so the existing Third Person choice changes behaviour for everyone; Headset brings back the current behaviour.
+
+The delays and fade times are constants (0.5 s, 2 s, 0.15 s), not settings. They can be made into settings later if they need tuning.
 
 First-person settings that are greyed out in third person (Camera Follows Animations, and any others) stay available while Third Person in Combat is on, because the view is first person most of the time. Turn With Game Camera applies to the combat view too.
 
@@ -49,7 +52,9 @@ First-person settings that are greyed out in third person (Camera Follows Animat
 - A cutscene that starts mid-fight plays as before. Afterwards, the view matches the combat state. 🔲
 - The HUD stays visible during the fade. 🔲
 - Third Person in Combat is greyed out when Perspective is Third Person. With it off, First Person is unchanged. 🔲
-- Third Person, camera behind Link: push forward and Link runs away from you. Turn your head 90° to the right while still holding forward: Link keeps running straight. Turn the camera (right stick): Link's direction turns with it. 🔲
+- Third Person Movement is greyed out in First Person with Third Person in Combat off, and available in the other two cases. 🔲
+- Third Person Movement set to Headset: third person moves relative to the headset, as now. 🔲
+- Third Person (Movement: Camera), camera behind Link: push forward and Link runs away from you. Turn your head 90° to the right while still holding forward: Link keeps running straight. Turn the camera (right stick): Link's direction turns with it. 🔲
 - First person: forward still follows the headset. 🔲
 - Run forward in first person into a fight, holding the stick: Link keeps his heading through the switch. Release the stick and push forward again: he moves relative to the third-person camera. 🔲
 - Performance: no measurable FPS change, checked with `tools/metrics.sh` in a fight. 🔲
@@ -58,6 +63,6 @@ First-person settings that are greyed out in third person (Camera Follows Animat
 - The combat check is a small function (e.g. `isInCombat()`) that reads `Z2GetSeqMgr()->getSubBgmID()` / `getMainBgmID()` against the track table. The delays work like the game's other timers: a counter per state, ticked once per game tick, so they don't depend on frame rate.
 - `isFirstPerson()` gets one new rule for the new choice: during normal gameplay, if in combat (after the delays) and not in a first-person aim mode, return false. This is the same way Third Person and wolf form already force third person. Showing Link's body follows the existing `vrThirdPerson` checks, extended to the new choice while it is in third person.
 - There is no fade code in the VR layer yet. The fade will be a black, full-view overlay drawn over the 3D scene in both eyes, before the HUD layer. The camera swap happens on the frame where the overlay is fully opaque.
-- Movement basis: in `d_a_alink.cpp`, `getHeadMoveAngleS()` is replaced by a new `getMoveBasisAngleS()`. That returns the head yaw in first person, and the smooth-turn yaw alone (no head rotation) while the third-person view is in use, with the hold rule from item 12. The movement fix (items 10, 11 and 13) also applies to the plain Third Person choice, so it is upstream-worthy on its own: it can go in a separate commit so it can be offered upstream without the combat switch.
+- Movement basis: in `d_a_alink.cpp`, `getHeadMoveAngleS()` is replaced by a new `getMoveBasisAngleS()`. That returns the head yaw in first person, and the smooth-turn yaw alone (no head rotation) while the third-person view is in use and Third Person Movement is Camera, with the hold rule from item 12. The movement fix (items 10, 11 and 13) also applies to the plain Third Person choice, so it is upstream-worthy on its own: it can go in a separate commit so it can be offered upstream without the combat switch.
 - The pure logic (enter/exit delays, movement-basis hold, the aim exception, fade timing) goes in `vr_math.hpp` or a small header next to it, with host unit tests in `src/tests/vr/`.
 - A scenario script (`tools/scenarios/combat-camera.txt`) warps near an enemy and takes screenshots before, during and after combat, so the switch can be checked without a headset.
