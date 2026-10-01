@@ -2572,8 +2572,11 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
                     vr_render::g_tvModeActive = true;
                     vr_render::g_tvEye = view->lookat.eye;
                     vr_render::g_tvCenter = view->lookat.center;
-                    vr_render::g_tvZoom =
-                        math::tvZoom(vr_render::tvScreenTanHalfFovy(view->aspect), view->fovy);
+                    const float screenTanHalfFovy = vr_render::tvScreenTanHalfFovy(view->aspect);
+                    vr_render::g_tvZoom = math::tvZoom(screenTanHalfFovy, view->fovy);
+                    vr_render::g_tvHeightPitch = math::tvHeightPitch(
+                        static_cast<float>(dusk::getSettings().game.vrTvHeight.getValue()),
+                        screenTanHalfFovy);
                     g_cutsceneFrame.distance =
                         static_cast<float>(dusk::getSettings().game.vrTvDistance.getValue());
                 }

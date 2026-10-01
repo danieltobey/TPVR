@@ -170,9 +170,9 @@ TEST_SUITE("horse steering") {
 }
 
 TEST_SUITE("panels") {
-    TEST_CASE("TV defaults: 760 cm diagonal at 500 cm, 16:9 is ~40.9 degrees tall") {
-        const float t = tvScreenTanHalfFovy(760.f, 500.f, 16.f / 9.f);
-        CHECK(2.f * deg(std::atan(t)) == Approx(40.9f).epsilon(0.005));
+    TEST_CASE("TV defaults: 660 cm diagonal at 550 cm, 16:9 is ~32.8 degrees tall") {
+        const float t = tvScreenTanHalfFovy(660.f, 550.f, 16.f / 9.f);
+        CHECK(2.f * deg(std::atan(t)) == Approx(32.8f).epsilon(0.005));
     }
 
     TEST_CASE("TV screen: twice as far looks half as tall") {
@@ -185,6 +185,23 @@ TEST_SUITE("panels") {
         CHECK(tvScreenTanHalfFovy(760.f, 500.f, 10.f) == Approx(tvScreenTanHalfFovy(760.f, 500.f, 3.f)));
         CHECK(tvScreenTanHalfFovy(760.f, 500.f, 0.1f) == Approx(tvScreenTanHalfFovy(760.f, 500.f, 0.5f)));
         CHECK(std::isfinite(tvScreenTanHalfFovy(760.f, 0.f, 16.f / 9.f)));
+    }
+
+    TEST_CASE("TV height: default -10% at default size is ~3.4 degrees down") {
+        const float t = tvScreenTanHalfFovy(660.f, 550.f, 16.f / 9.f);
+        CHECK(deg(tvHeightPitch(-10.f, t)) == Approx(-3.37f).epsilon(0.01));
+        CHECK(tvHeightPitch(0.f, t) == Approx(0.f));
+        CHECK(tvHeightPitch(30.f, t) == Approx(-tvHeightPitch(-30.f, t)));
+    }
+
+    TEST_CASE("TV height: same share of the screen at any distance, clamped to +/-50%") {
+        const float near = tvScreenTanHalfFovy(760.f, 500.f, 16.f / 9.f);
+        const float far = tvScreenTanHalfFovy(760.f, 1000.f, 16.f / 9.f);
+        // Offset in cm at the screen = distance * tan(pitch) = share * screen height.
+        CHECK(500.f * std::tan(tvHeightPitch(-20.f, near)) == Approx(-0.2f * 2.f * near * 500.f));
+        CHECK(1000.f * std::tan(tvHeightPitch(-20.f, far)) == Approx(-0.2f * 2.f * far * 1000.f));
+        CHECK(tvHeightPitch(-90.f, near) == Approx(tvHeightPitch(-50.f, near)));
+        CHECK(tvHeightPitch(90.f, near) == Approx(tvHeightPitch(50.f, near)));
     }
 
     TEST_CASE("TV zoom is 1 when the camera fov matches the screen") {
