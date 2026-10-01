@@ -1,0 +1,152 @@
+# Fork CI for danieltobey/TPVR (docs/vr-specs/10-dev-tooling.md, item 7).
+# Fork-only: keep this file out of upstream PRs. Upstream's build.yml is
+# switched off in the fork's Actions settings instead of being edited, so
+# merges from upstream never conflict.
+name: Fork CI
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+      - '*LICENSE'
+      - 'docs/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  # The menu fix's Aurora commit lives on the fork, not upstream Aurora.
+  AURORA_URL: https://github.com/danieltobey/aurora.git
+
+jobs:
+  unit-tests:
+    name: Unit tests
+    if: github.repository == 'danieltobey/TPVR'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install latest stable clang
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install ninja-build
+          wget -q https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh
+          echo "CXX=$(ls /usr/bin/clang++-* | sort -V | tail -1)" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          $CXX --version
+          cmake -S tests/vr -B build/host-tests -G Ninja
+          cmake --build build/host-tests
+
+      - name: Run
+        run: build/host-tests/vr_math_tests
+
+  build-android:
+    name: Android (arm64 debug APK)
+    if: github.repository == 'danieltobey/TPVR'
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_NDK_VERSION: "29.0.14206865"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check out submodules (Aurora from the fork)
+        run: |
+          git submodule init
+          git config submodule.extern/aurora.url "$AURORA_URL"
+          git submodule update --recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install ninja-build
+
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Install Rust Android target
+        run: |
+          rustup toolchain install stable
+          rustup target add aarch64-linux-android
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      # Same build as the dev environment's build.sh (developer tooling on).
+      - name: Configure CMake
+        run: >
+          cmake --preset android-arm64 -DDUSK_VR_DEVTOOLS=ON
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build native library and mods
+        run: cmake --build --preset android-arm64 --target dusklight dusklight_mods
+
+      - name: Build APK
+        working-directory: platforms/android
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      # Signed with this runner's own debug key, not the dev machine's: it
+      # can't update an installed dev build without uninstalling it first.
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: tpvr-android-arm64-debug
+          path: platforms/android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+
+  build-windows:
+    name: Windows (MSVC x86_64)
+    if: github.repository == 'danieltobey/TPVR'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check out submodules (Aurora from the fork)
+        shell: bash
+        run: |
+          git submodule init
+          git config submodule.extern/aurora.url "$AURORA_URL"
+          git submodule update --recursive
+
+      - name: Enable Visual Studio environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
+      # msvc-dev-cmd sets VCPKG_ROOT, set it back
+      - name: Override VCPKG_ROOT
+        run: echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      # openxr-loader: without it the VR code is skipped and linking fails.
+      - name: Install dependencies
+        run: |
+          choco install ninja
+          vcpkg install freetype:x64-windows zstd:x64-windows openxr-loader:x64-windows
+
+      - name: Configure CMake
+        run: cmake --preset x-windows-ci-msvc
+
+      - name: Build
+        run: cmake --build --preset x-windows-ci-msvc
