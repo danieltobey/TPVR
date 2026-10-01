@@ -141,6 +141,14 @@ void finishRequest(Request& req) {
     std::filesystem::rename(tmp, req.outPath, ec);
 }
 
+// `crash`: crash the game on purpose, to check tools/crash.sh (spec 10, item
+// 10). Kept out of line so the stack names it.
+[[gnu::noinline]] void crashOnPurpose() {
+    duskVrLog("[devtools] crash: crashing on purpose (null pointer write)\n");
+    volatile int* p = nullptr;
+    *p = 1;
+}
+
 bool isWorldReady() {
     return !dComIfGp_isEnableNextStage() && dComIfGp_getPlayer(0) != nullptr &&
            !dComIfGp_event_runCheck();
@@ -265,6 +273,18 @@ bool step(Request& req) {
             // screen leaves its menu open.
             dusk::ui::close_all_documents();
             continue;
+        }
+        if (cmd == "metrics" && args.size() == 2 && (args[1] == "start" || args[1] == "stop")) {
+            // The game can't drive the metrics app; this marks the time
+            // (device epoch ms) and scenario.sh starts/stops the recording
+            // around the script and summarises just this window.
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            emit(req, "metrics " + args[1] + " " + std::to_string(ms));
+            continue;
+        }
+        if (cmd == "crash" && args.size() == 1) {
+            crashOnPurpose();
         }
         if (cmd == "head" && args.size() == 2 && (args[1] == "lock" || args[1] == "unlock")) {
             input().headLocked = args[1] == "lock";

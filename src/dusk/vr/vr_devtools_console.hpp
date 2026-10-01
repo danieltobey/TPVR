@@ -18,6 +18,8 @@
 //   input stop                      release all scripted input
 //   head lock | head unlock         fixed head pose for repeatable views
 //   menu close                      close open menus (they block game input)
+//   metrics start | metrics stop    mark a measurement window (scenario.sh records it)
+//   crash                           crash the game on purpose (tests tools/crash.sh)
 // Requests run one at a time, in arrival order.
 
 #pragma once
