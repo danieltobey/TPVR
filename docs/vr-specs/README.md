@@ -31,7 +31,7 @@ Spec-driven development for the TPVR comfort, lighting, audio and presentation w
 | [09 VR settings page](09-vr-settings-page.md) | 🟡 Built |
 | [10 Dev tooling](10-dev-tooling.md) | ✅ Verified (horse deadzone / fill-light follow re-checks deferred) |
 | Anti-aliasing | 📝 To be specified |
-| Dynamic resolution scaling | 📝 To be specified |
+| [12 Dynamic resolution scaling](12-dynamic-resolution.md) | 📝 Proposed |
 | Performance investigation | 📝 To be specified |
 
 All behaviour here is VR-only; flatscreen play is unchanged.
