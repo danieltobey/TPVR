@@ -103,6 +103,8 @@ UserSettings g_userSettings = {
         .vrThirdPerson {"game.vrThirdPerson", false},
         .vrThirdPersonFollowCameraYaw {"game.vrThirdPersonFollowCameraYaw", true},
         .vrThirdPersonInCombat {"game.vrThirdPersonInCombat", false},
+        .vrThirdPersonInCombatWolf {"game.vrThirdPersonInCombatWolf", false},
+        .vrThirdPersonInCombatHorse {"game.vrThirdPersonInCombatHorse", false},
         .vrThirdPersonCameraMovement {"game.vrThirdPersonCameraMovement", true},
         .vrAttachBodyRotationToHead {"game.vrAttachBodyRotationToHead", false},
         .vrExperimentalCutsceneFirstPerson {"game.vrExperimentalCutsceneFirstPerson", false},
@@ -432,6 +434,8 @@ void registerSettings() {
     Register(g_userSettings.game.vrThirdPerson);
     Register(g_userSettings.game.vrThirdPersonFollowCameraYaw);
     Register(g_userSettings.game.vrThirdPersonInCombat);
+    Register(g_userSettings.game.vrThirdPersonInCombatWolf);
+    Register(g_userSettings.game.vrThirdPersonInCombatHorse);
     Register(g_userSettings.game.vrThirdPersonCameraMovement);
     Register(g_userSettings.game.vrAttachBodyRotationToHead);
     Register(g_userSettings.game.vrExperimentalCutsceneFirstPerson);

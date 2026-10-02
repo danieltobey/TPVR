@@ -948,6 +948,13 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
         // moving, cutscenes, HUD, lighting, combat, performance); every
         // description is at most two sentences and states the default.
 
+        // Spec 11: any of the three Third Person in Combat toggles.
+        static const auto isAnyCombatThirdPersonOn = [] {
+            const auto& game = getSettings().game;
+            return game.vrThirdPersonInCombat.getValue() ||
+                   game.vrThirdPersonInCombatWolf.getValue() ||
+                   game.vrThirdPersonInCombatHorse.getValue();
+        };
         leftPane.add_section("View");
         // Perspective is one either/or choice over game.vrThirdPerson.
         leftPane.register_control(
@@ -987,10 +994,25 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             });
         config_bool_select(leftPane, rightPane, getSettings().game.vrThirdPersonInCombat,
             {
-                .key = "Third Person in Combat",
-                .helpText = "In first person, switches to third person during fights, then back "
-                            "when the fight is over. Aiming without Z-targeting stays in first "
-                            "person. Off by default.",
+                .key = "Third Person in Combat (Link)",
+                .helpText = "In first person, switches to third person during fights on foot, "
+                            "then back when the fight is over. Aiming without Z-targeting stays "
+                            "in first person. Off by default.",
+                .isDisabled = [] { return getSettings().game.vrThirdPerson.getValue(); },
+            });
+        config_bool_select(leftPane, rightPane, getSettings().game.vrThirdPersonInCombatWolf,
+            {
+                .key = "Third Person in Combat (Wolf Link)",
+                .helpText = "In first person, switches to third person during fights as Wolf "
+                            "Link, then back when the fight is over. Off by default.",
+                .isDisabled = [] { return getSettings().game.vrThirdPerson.getValue(); },
+            });
+        config_bool_select(leftPane, rightPane, getSettings().game.vrThirdPersonInCombatHorse,
+            {
+                .key = "Third Person in Combat (Epona)",
+                .helpText = "In first person, switches to third person during fights on Epona, "
+                            "then back when the fight is over. Aiming without Z-targeting stays "
+                            "in first person. Off by default.",
                 .isDisabled = [] { return getSettings().game.vrThirdPerson.getValue(); },
             });
         // Third Person Movement is a Camera/Headset choice over
@@ -1007,7 +1029,7 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                 .isDisabled =
                     [] {
                         return !getSettings().game.vrThirdPerson.getValue() &&
-                               !getSettings().game.vrThirdPersonInCombat.getValue();
+                               !isAnyCombatThirdPersonOn();
                     },
                 .isModified =
                     [] {
@@ -1047,7 +1069,7 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                 .isDisabled =
                     [] {
                         return !getSettings().game.vrThirdPerson.getValue() &&
-                               !getSettings().game.vrThirdPersonInCombat.getValue();
+                               !isAnyCombatThirdPersonOn();
                     },
             });
         // Shown inverted over game.vrStableCamera: on = the original camera

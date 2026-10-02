@@ -367,8 +367,12 @@ struct UserSettings {
         // Default on.
         ConfigVar<bool> vrThirdPersonFollowCameraYaw;
         // Spec 11: in first person, switch to the third-person view during
-        // combat (battle/boss music), with a fade. Default off.
+        // combat (battle/boss music), with a fade. One toggle per form:
+        // Link (on foot, swimming, canoe, board), Wolf Link, and riding
+        // Epona. Default off.
         ConfigVar<bool> vrThirdPersonInCombat;
+        ConfigVar<bool> vrThirdPersonInCombatWolf;
+        ConfigVar<bool> vrThirdPersonInCombatHorse;
         // Spec 11: in the third-person view (Third Person, or a combat
         // switch), the movement stick is relative to the camera (on) or to
         // the headset (off, the old behaviour). Default on.

@@ -234,27 +234,25 @@ TEST_SUITE("combat camera (spec 11)") {
         return out;
     }
 
-    TEST_CASE("combat counts only after the enter delay") {
+    TEST_CASE("combat counts only after the 3 s enter delay") {
         CombatDelay d;
-        CHECK_FALSE(run(d, true, 0.4f));
+        CHECK_FALSE(run(d, true, 2.9f));
         CHECK(run(d, true, 0.15f));
     }
 
-    TEST_CASE("a short blip of combat never switches") {
+    TEST_CASE("combat shorter than the enter delay never switches") {
         CombatDelay d;
         for (int i = 0; i < 10; ++i) {
-            CHECK_FALSE(run(d, true, 0.3f));
+            CHECK_FALSE(run(d, true, 2.5f));
             CHECK_FALSE(run(d, false, 0.3f));
         }
     }
 
-    TEST_CASE("combat ends only after the exit delay, and restarts the wait if it resumes") {
+    TEST_CASE("combat ends at once when the signal stops") {
         CombatDelay d;
-        run(d, true, 1.f);
-        CHECK(run(d, false, 1.9f));
-        CHECK(run(d, true, 0.1f));    // fight resumes within 2 s
-        CHECK(run(d, false, 1.9f));   // so the 2 s start over
-        CHECK_FALSE(run(d, false, 0.2f));
+        run(d, true, 4.f);
+        CHECK(d.active);
+        CHECK_FALSE(d.update(false, kTick));
     }
 
     TEST_CASE("fade switches the view only when fully black, then clears") {

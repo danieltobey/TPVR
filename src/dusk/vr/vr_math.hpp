@@ -186,8 +186,8 @@ inline PanelSize panelFromDiagonal(float diagonal, float heightOverWidth) {
 // Combat camera and third-person movement (spec 11)
 // ---------------------------------------------------------------------------
 
-inline constexpr float kCombatEnterDelaySec = 0.5f;
-inline constexpr float kCombatExitDelaySec = 2.0f;
+inline constexpr float kCombatEnterDelaySec = 3.0f;  // 0.5 s felt too eager (Daniel, 2026-10-02)
+inline constexpr float kCombatExitDelaySec = 0.0f;   // back to first person as soon as the fight ends
 inline constexpr float kViewFadeSec = 0.15f;
 // How far (s16 binary angle) the stick may move from where it was at a view
 // switch before the held movement basis is let go: 45 degrees.

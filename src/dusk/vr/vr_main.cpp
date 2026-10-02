@@ -731,11 +731,23 @@ static dusk::vr::math::ViewFade g_combatFade;
 
 // Once per frame, before anything reads isFirstPerson(): runs the combat
 // delays and the fade, and publishes the result as vr_link::g_combatThirdPerson.
+// Which Third Person in Combat toggle applies to Link's current form:
+// riding Epona, Wolf Link, or Link (everything else).
+static bool isCombatCameraOnForForm(daAlink_c* link) {
+    const auto& game = getSettings().game;
+    if (link->checkHorseRide()) return game.vrThirdPersonInCombatHorse.getValue();
+    if (link->checkWolf()) return game.vrThirdPersonInCombatWolf.getValue();
+    return game.vrThirdPersonInCombat.getValue();
+}
+
 static void updateCombatCamera(float dtSec, const XrPosef& hmdPose) {
     static dusk::vr::math::CombatDelay s_delay;
     auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
-    const bool enabled = link != nullptr && getSettings().game.vrThirdPersonInCombat.getValue() &&
-                         !getSettings().game.vrThirdPerson.getValue();
+    const auto& game = getSettings().game;
+    const bool enabled = link != nullptr && !game.vrThirdPerson.getValue() &&
+                         (game.vrThirdPersonInCombat.getValue() ||
+                          game.vrThirdPersonInCombatWolf.getValue() ||
+                          game.vrThirdPersonInCombatHorse.getValue());
     if (!enabled) {
         s_delay = {};
         g_combatFade.update(false, false, dtSec);
@@ -744,7 +756,9 @@ static void updateCombatCamera(float dtSec, const XrPosef& hmdPose) {
     }
 
     const bool combatMusic = isCombatMusicPlaying();
-    const bool wanted = s_delay.update(combatMusic, dtSec);
+    // A form whose toggle is off counts as out of combat, so changing form
+    // mid-fight (e.g. dismounting) follows the new form's toggle.
+    const bool wanted = s_delay.update(combatMusic && isCombatCameraOnForForm(link), dtSec);
     // Fade only when the switch would change what's on screen during play:
     // events have their own camera rules (and fades), and the game's own
     // first-person modes switch at once.
