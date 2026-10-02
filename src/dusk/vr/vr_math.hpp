@@ -186,29 +186,22 @@ inline PanelSize panelFromDiagonal(float diagonal, float heightOverWidth) {
 // Combat camera and third-person movement (spec 11)
 // ---------------------------------------------------------------------------
 
-inline constexpr float kCombatEnterDelaySec = 3.0f;  // 0.5 s felt too eager (Daniel, 2026-10-02)
-inline constexpr float kCombatExitDelaySec = 0.0f;   // back to first person as soon as the fight ends
 inline constexpr float kViewFadeSec = 0.15f;
 // How far (s16 binary angle) the stick may move from where it was at a view
 // switch before the held movement basis is let go: 45 degrees.
 inline constexpr int kMoveBasisHoldReleaseS = 0x2000;
 
-// Combat as the camera sees it: the raw signal has to hold for the enter
-// delay before it counts, and has to be gone for the exit delay before it
-// stops counting. A blip back to the current state restarts the timer.
-struct CombatDelay {
+// Third person in combat (spec 11): switched on by the target button while
+// in combat, and held on until combat ends, however the button is used
+// after that. No timers.
+struct CombatLatch {
     bool active = false;
-    float timerSec = 0.f;
 
-    bool update(bool combatNow, float dtSec) {
-        if (combatNow == active) {
-            timerSec = 0.f;
-            return active;
-        }
-        timerSec += dtSec;
-        if (timerSec >= (active ? kCombatExitDelaySec : kCombatEnterDelaySec)) {
-            active = combatNow;
-            timerSec = 0.f;
+    bool update(bool combatNow, bool targetPressed) {
+        if (!combatNow) {
+            active = false;
+        } else if (targetPressed) {
+            active = true;
         }
         return active;
     }

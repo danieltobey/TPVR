@@ -227,32 +227,26 @@ TEST_SUITE("panels") {
 TEST_SUITE("combat camera (spec 11)") {
     constexpr float kTick = 1.f / 72.f;
 
-    // Feeds the same signal for `sec` seconds of 72 Hz frames.
-    bool run(CombatDelay& d, bool signal, float sec) {
-        bool out = d.active;
-        for (float t = 0.f; t < sec; t += kTick) out = d.update(signal, kTick);
-        return out;
+    TEST_CASE("combat alone never switches in") {
+        CombatLatch l;
+        for (int i = 0; i < 100; ++i) CHECK_FALSE(l.update(true, false));
     }
 
-    TEST_CASE("combat counts only after the 3 s enter delay") {
-        CombatDelay d;
-        CHECK_FALSE(run(d, true, 2.9f));
-        CHECK(run(d, true, 0.15f));
+    TEST_CASE("target button outside combat does nothing") {
+        CombatLatch l;
+        CHECK_FALSE(l.update(false, true));
+        CHECK_FALSE(l.update(true, false));
     }
 
-    TEST_CASE("combat shorter than the enter delay never switches") {
-        CombatDelay d;
-        for (int i = 0; i < 10; ++i) {
-            CHECK_FALSE(run(d, true, 2.5f));
-            CHECK_FALSE(run(d, false, 0.3f));
-        }
-    }
-
-    TEST_CASE("combat ends at once when the signal stops") {
-        CombatDelay d;
-        run(d, true, 4.f);
-        CHECK(d.active);
-        CHECK_FALSE(d.update(false, kTick));
+    TEST_CASE("target button in combat switches in and holds until combat ends") {
+        CombatLatch l;
+        CHECK_FALSE(l.update(true, false));
+        CHECK(l.update(true, true));
+        CHECK(l.update(true, false));  // button released: still on
+        CHECK(l.update(true, false));
+        CHECK_FALSE(l.update(false, false));  // combat over: off at once
+        CHECK_FALSE(l.update(true, false));   // next fight needs a new press
+        CHECK(l.update(true, true));
     }
 
     TEST_CASE("fade switches the view only when fully black, then clears") {

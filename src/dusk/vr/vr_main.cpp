@@ -26,7 +26,7 @@
 
 #include "SSystem/SComponent/c_API_graphic.h"  // cAPIGph_Painter
 #include "SSystem/SComponent/c_math.h"          // cM_atan2s -- getHeadMoveAngleS()
-#include "m_Do/m_Do_controller_pad.h"            // mDoCPd_c::getSubStickX -- real physical gamepad C-stick
+#include "m_Do/m_Do_controller_pad.h"            // mDoCPd_c::getSubStickX -- real physical gamepad C-stick; getHoldLockL (spec 11)
 #include "m_Do/m_Do_graphic.h"                  // mDoGph_gInf_c::captureHudBillboard
 #include "f_pc/f_pc_manager.h"                  // fpcM_DrawIterater, fpcM_Draw
 #include "dusk/game_clock.h"                    // dusk::game_clock::FrameTiming
@@ -54,7 +54,7 @@
 #include "dusk/vr/vr_devtools_console.hpp"    // DUSK_VR_DEVTOOLS: test driver (scripted input, head lock)
 #include "d/actor/d_a_horse.h"                // daHorse_c -- horse turn follow
 #include "dusk/interp/frame_interpolation.h"   // sim_tick_seq/get_interpolation_step
-#include "dusk/vr/vr_math.hpp"                 // spec 11: CombatDelay, ViewFade, MoveBasisHold
+#include "dusk/vr/vr_math.hpp"                 // spec 11: CombatLatch, ViewFade, MoveBasisHold
 #include "Z2AudioLib/Z2SeqMgr.h"               // spec 11: battle/boss music as the combat signal
 
 // TEMP DIAGNOSTIC (VR black-screen-after-save investigation): plain,
@@ -729,8 +729,6 @@ static s16 computeCameraMoveAngleS(const XrPosef& hmdPose) {
 // Fade state; alpha is drawn by drawCutsceneFrameIfActive().
 static dusk::vr::math::ViewFade g_combatFade;
 
-// Once per frame, before anything reads isFirstPerson(): runs the combat
-// delays and the fade, and publishes the result as vr_link::g_combatThirdPerson.
 // Which Third Person in Combat toggle applies to Link's current form:
 // riding Epona, Wolf Link, or Link (everything else).
 static bool isCombatCameraOnForForm(daAlink_c* link) {
@@ -740,8 +738,10 @@ static bool isCombatCameraOnForForm(daAlink_c* link) {
     return game.vrThirdPersonInCombat.getValue();
 }
 
+// Once per frame, before anything reads isFirstPerson(): runs the combat
+// latch and the fade, and publishes the result as vr_link::g_combatThirdPerson.
 static void updateCombatCamera(float dtSec, const XrPosef& hmdPose) {
-    static dusk::vr::math::CombatDelay s_delay;
+    static dusk::vr::math::CombatLatch s_latch;
     auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
     const auto& game = getSettings().game;
     const bool enabled = link != nullptr && !game.vrThirdPerson.getValue() &&
@@ -749,16 +749,19 @@ static void updateCombatCamera(float dtSec, const XrPosef& hmdPose) {
                           game.vrThirdPersonInCombatWolf.getValue() ||
                           game.vrThirdPersonInCombatHorse.getValue());
     if (!enabled) {
-        s_delay = {};
+        s_latch = {};
         g_combatFade.update(false, false, dtSec);
         vr_link::g_combatThirdPerson = false;
         return;
     }
 
     const bool combatMusic = isCombatMusicPlaying();
-    // A form whose toggle is off counts as out of combat, so changing form
-    // mid-fight (e.g. dismounting) follows the new form's toggle.
-    const bool wanted = s_delay.update(combatMusic && isCombatCameraOnForForm(link), dtSec);
+    // Switch in on the target button while in combat; stay in until combat
+    // ends. A form whose toggle is off counts as out of combat, so changing
+    // form mid-fight (e.g. dismounting) follows the new form's toggle.
+    const bool targetPressed = mDoCPd_c::getHoldLockL(PAD_1) != 0;
+    const bool wanted =
+        s_latch.update(combatMusic && isCombatCameraOnForForm(link), targetPressed);
     // Fade only when the switch would change what's on screen during play:
     // events have their own camera rules (and fades), and the game's own
     // first-person modes switch at once.
