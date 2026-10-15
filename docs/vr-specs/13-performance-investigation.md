@@ -1,0 +1,73 @@
+# 13 Performance investigation (Quest 3, heavy scenes)
+
+**Status:** 📝 Proposed (draft 2026-10-15, awaiting approval; open questions at the end). No code yet.
+
+This spec is a **measurement project**, not a fix. Its product is (a) a repeatable benchmark that any later performance change is judged by, and (b) a findings report that ranks what costs frame time in busy areas. Each fix chosen from that report gets its own spec, built and verified against the same benchmark.
+
+## Problem
+Busy areas drop below the display rate (72 Hz), and the compositor then repeats or reprojects frames, which shows as judder. We don't know *why* in any given scene, and the numbers we have disagree:
+
+| Source | Scene | Result |
+|---|---|---|
+| Spec 03 A/B (2026-09-29) | central Ordon | ~65 FPS, GPU-bound |
+| Spec 10 metrics walk (2026-10-01) | Ordon walk | 72.4 FPS, GPU 66%, CPU 38% |
+| vr-mod-notes (2026-09-20, after single-pass) | "heaviest spot" | 50–52 FPS; GPU 12.4 ms cool, ~14 ms hot |
+
+Three things make guessing unreliable:
+- **Thermals.** The Quest 3 GPU throttles within minutes (about 640 → 545 MHz), so the same scene measures differently cool and hot. Every earlier A/B was confounded by this.
+- **Fill-bound or geometry-bound is unknown.** Rendering at 90% "didn't help much" (2026-09-20). That hints the GPU's time goes into draw calls and vertices rather than pixels, but the planned 50% test was never run. This decides whether resolution levers (spec 12's dynamic resolution) can help at all.
+- **The workload changed.** Upstream's 2026-10 merge added Full Body with arm IK (on by default), cloud shadows back in VR, optional object shadows (an extra scene traversal plus shadow maps), compositor sharpening (on), and high CPU/GPU clocks (on). None of these has been measured.
+
+## What's already known and done (don't redo)
+From `vr-mod-notes` (2026-09-16 … 09-20) and specs 08/10:
+- Single-pass stereo: the scene is recorded once and replayed per eye; it renders directly into the swapchain image; depth is discarded when nothing reads it. Mid-eye screen captures are gone except the underwater blur. The minimap renders every other sim tick at 1.5× (it was ~4 ms of GPU).
+- **The runtime overlaps CPU and GPU.** 4 ms of artificial main-thread time was fully absorbed, so the frame rate is set by whether the GPU's frame fits in one display period (13.9 ms at 72 Hz), unless the CPU side goes far over.
+- Fixed foveated rendering is **not possible** on this renderer (Dawn has no fragment-density-map support). This answers spec 12's open question 4.
+- Tools that work today: the runtime's per-second `VrApi` logcat line (FPS, stale frames, app GPU ms, CPU/GPU clocks, levels, temperature); Aurora's `[gpuprof]` per-pass GPU times (Android builds); `[dusk::vr::perf]` main-thread phase timing (only logged on dips over 22 ms); Tracy zones (`./build.sh tracy`); OVR Metrics CSVs (`tools/metrics.sh`); scenarios (`tools/scenario.sh`) with `warp`, `head lock`, scripted input, `wait` and `metrics start|stop`.
+
+## Required behaviour
+
+### Phase A: benchmark harness (tooling, dev builds only)
+1. **Benchmark scenes.** One scenario per heavy scene in `tools/scenarios/bench/`, each following one fixed recipe: warp to a fixed spot, set a fixed time of day, lock the head to a fixed orientation, let it settle for 5 s, hold still for 10 s, then follow a scripted ~20 s path of walking and turning. Scenes are Daniel's list (question 1) plus one light reference scene (an interior) to calibrate against. Starting candidates: Ordon Village (`F_SP103`), South Faron Woods (`F_SP108`), Hyrule Field (`F_SP121`), Castle Town (`F_SP116`), Kakariko Village (`F_SP109`), Lake Hylia (`F_SP115`).
+2. **One command per run.** `tools/bench.sh <scene…|all> [--label <text>] [--repeat N]` runs the scenes back to back and records every source at once for each: the `VrApi` lines, `[gpuprof]`, the perf log (item 5), and the OVR Metrics CSV. It writes `logs/bench/<date>-<commit>-<label>/` with the raw logs, `summary.csv` and `summary.md`.
+3. **Summary per scene and segment** (hold / path):
+   - frame rate: average, 1% low, share of frames at the display rate, stale frames;
+   - GPU frame time (average, 95th percentile) and the top passes by GPU time with their draw counts;
+   - main-thread time split into sim tick / scene traversal and recording / waiting, plus render-worker time;
+   - CPU/GPU clocks, levels and temperature, start and end;
+   - **GPU work in megacycles** (GPU ms × GPU MHz) next to the milliseconds, so a hot run and a cool run can be compared. A throttled GPU takes longer for the same work, but the cycle count stays about the same.
+4. **Thermal protocol.** Same power state for every run (state which: plugged in or on battery). Before each scene, `bench.sh` waits until the GPU reports its cool clock, or until the temperature is under a set threshold, and logs if it gave up. Each summary flags any throttling during the run. Two measurement modes: **cool** (precise A/B comparisons) and **soak** (the same scene looped for 10 minutes, giving the hot steady state you actually play in).
+5. **Perf log on demand.** In devtools builds, the console command `perf log on|off` turns on a 1-per-second summary line (frame phases, render-worker time, draws, passes, actors drawn/culled, live particles), instead of only logging dips. The leftover 2026-09-20 diagnostics (`[passdump]`, dip lines, the `VR swapchain handoff` zone) move behind this same switch. Release builds log and listen for nothing new.
+6. **Comparison.** `tools/bench.sh compare <runA> <runB>` prints per-scene deltas, with each scene's measured run-to-run noise beside them, so a change smaller than the noise reads as "no change".
+7. **Repeatability gate.** Run the same scene 3 times, cool: average FPS agrees within ±2 and GPU megacycles within ±5%. Until that holds, nothing measured with the harness counts.
+
+### Phase B: baseline and diagnosis
+8. **Baseline** every scene on current `dev` with the shipped defaults (Full Body on, Sharpening on, High Clocks on, Shadows off, 100% resolution, 72 Hz), in both cool and soak modes.
+9. **Classify each scene.** CPU-bound (main thread or render worker over the period while the GPU waits) or GPU-bound. For GPU-bound scenes, a **resolution sweep** (50 / 70 / 100 / 130%, by restarting with a changed VR Render Resolution) tells pixel-bound from geometry/draw-bound: GPU time that scales with pixel count is fill; time that stays flat is geometry, draws or fixed passes.
+10. **Cost of each contributor (ablation).** In devtools builds, `perf off <part>` / `perf on <part>` switch one part off at a time; the benchmark measures the difference in GPU megacycles and CPU ms. Parts: minimap render, HUD capture, cloud shadows, grass and flowers, particles, Full Body (body draw + arm IK), object shadows (on vs off), sharpening, bloom / depth of field / other post passes, the actor cull distance, sky. These switches are measurement-only and never appear in the settings page.
+11. **Clocks and refresh rate.** Measure High Clocks on vs off, and refresh rates of 72 vs 80 vs 90 Hz (`game.vrDisplayRefreshRate`) to see the headroom. Also measure whether a lower CPU level keeps the GPU clock up for longer (shared thermal budget; hypothesis from 2026-09-20).
+12. **GPU counters, only if needed.** If the pass timings can't explain a GPU cost (e.g. bandwidth or binning on the tiled GPU), capture with a GPU profiler that works from Linux (candidates: Perfetto with Adreno counters, Snapdragon Profiler, RenderDoc Meta fork; check support first). Decided when reached.
+
+### Phase C: findings
+13. **Findings report** (`docs/perf/findings-<date>.md`): for each scene, what limits it, the top costs with numbers, and the cool vs soak difference. Then a ranked list of candidate fixes, each with its expected gain (ms and megacycles), visual cost, effort and risk.
+14. The report says go / no-go / changes for **spec 12** (dynamic resolution only helps where the GPU is fill-bound) and for parked levers such as Application SpaceWarp.
+15. Daniel picks which fixes to do; each becomes its own spec, and its verification is "before/after on the benchmark".
+
+## Settings
+None for players. Devtools-only console commands: `perf log on|off`, `perf off|on <part>`.
+
+## Verification
+1. With the game started (Daniel puts the headset on to launch it), `tools/bench.sh all` runs unattended under `tools/headset.sh awake` and produces a complete summary for every scene; `normal` afterwards.
+2. The repeatability gate (item 7) passes for every scene.
+3. A release build has no Tracy port open, no perf logs, and no `perf` commands.
+4. Consistency check: switching off a scene's top-ranked cost with `perf off` cuts the frame time by about the measured share.
+5. Daniel has reviewed the findings report and chosen what to fix.
+
+Saves stay safe: benchmarks warp from the title, and devtools builds stop auto-saving and point at slot 3 as soon as a remote command runs (rule 6).
+
+## Open questions for Daniel
+1. **Which scenes feel worst?** Where have you noticed drops: the candidates above, or others (a boss fight, many enemies, water, rain, fire)? Dynamic moments like crowds or fights are harder to script; worth adding one?
+2. **Target:** a solid 72 Hz everywhere at default settings? Or also find out what 90 Hz would take?
+3. **Which thermal state counts:** soak (after ~20 min of play, the state you actually play in) as the pass/fail number, with cool used for precise A/B? (Recommended.)
+4. **Spec 12 (dynamic resolution):** park it until phase B shows whether the heavy scenes are fill-bound? (Recommended. Its open question 4, foveation, is answered above: not possible on Dawn.)
+5. **Power state:** benchmark on USB power (convenient, but charging adds heat) or on battery (matches play)?
