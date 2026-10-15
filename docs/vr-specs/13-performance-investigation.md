@@ -1,6 +1,6 @@
 # 13 Performance investigation (Quest 3, heavy scenes)
 
-**Status:** 📝 Proposed (draft 2026-10-15; Daniel answered the open questions the same day, see *Decisions*). Awaiting approval to start phase A. No code yet.
+**Status:** Phase A 🚧 in progress (approved by Daniel 2026-10-15; his answers to the open questions are under *Decisions*). Phases B and C not started.
 
 This spec is a **measurement project**, not a fix. Its product is (a) a repeatable benchmark that any later performance change is judged by, and (b) a findings report that ranks what costs frame time in busy areas. Each fix chosen from that report gets its own spec, built and verified against the same benchmark.
 
@@ -33,9 +33,11 @@ From `vr-mod-notes` (2026-09-16 … 09-20) and specs 08/10:
    - **viewpoint sweep:** with the head locked level, hold each of 8 fixed directions (every 45°) for 5 s, because cost depends on where you look;
    - then a scripted ~20 s path of walking and turning.
 1a. **The scene must be the real scene, not just the map.** NPCs, animals and objects appear according to story progress, time of day and room loading. So:
-   - the benchmark plays from a **copy of Daniel's current save** placed in test slot 3 (slot 1 is only read, never written; back up first, rule 6), so the world is in his playthrough's state;
-   - after the warp, the scenario waits until the loaded actor count stops rising, then checks it against that scene's expected minimum (recorded on the first good run and kept in the scenario). Too few actors marks the run **invalid** instead of measuring an empty map;
+   - the benchmark plays from a **copy of Daniel's current save** placed in test slot 3 (slot 1 is only read, never written; back up first, rule 6), so the world is in his playthrough's state. The copy is frozen: it changes only when it's refreshed on purpose (`tools/bench.sh copy-save`), so the benchmark doesn't drift as he plays on. Console commands (devtools only): `save copy 1 3` copies the quest log in the game's own way (the file-select Copy: memory card read, slot copy with checksum, card write) and refuses any other target than slot 3; `save load 3` loads slot 3 into the game, as choosing it on the file select does, before the warp. `bench.sh copy-save` backs up the card file first and checks afterwards that only slot 3's bytes changed;
+   - after the warp, the scenario waits until the loaded actor count stops rising (`wait settled`: unchanged for 3 s, at most 30 s), then checks it against that scene's expected minimum (`expect actors <n>`, recorded on the first run as 90% of the count it settled at and kept in the scenario). Too few actors marks the run **invalid** instead of measuring an empty map;
    - each scene's first run also takes a screenshot per direction, so Daniel can confirm the scene looks like his play (crowds present).
+1b. **Segments.** The scenario marks each segment with `perf mark <name>` (`view0` … `view7`, `path`, `end`). A mark logs a timestamped line and closes the current perf log and `[gpuprof]` windows, so no summary line spans two segments. The summary assigns every source's lines to segments by their logcat time (the runtime's and OVR Metrics' once-a-second samples only when the whole second lies inside the segment). Known blur: GPU timings are read back a few frames late, so about 3 frames of the previous segment land in a segment's first `[gpuprof]` window; screenshot captures get their own `shot<n>` segments, which the summary ignores.
+1c. **Save guard.** The guard from spec 11's branch (devtools builds stop auto-saving and point the file number at slot 3 once a remote command runs) is carried into this branch: `dev` lacked it.
 2. **One command per run.** `tools/bench.sh <scene…|all> [--label <text>] [--repeat N]` runs the scenes back to back and records every source at once for each: the `VrApi` lines, `[gpuprof]`, the perf log (item 5), and the OVR Metrics CSV. It writes `logs/bench/<date>-<commit>-<label>/` with the raw logs, `summary.csv` and `summary.md`.
 3. **Summary per scene and segment** (each viewpoint, and the path), with the worst viewpoint called out:
    - frame rate: average, 1% low, share of frames at the display rate, stale frames;
@@ -44,6 +46,8 @@ From `vr-mod-notes` (2026-09-16 … 09-20) and specs 08/10:
    - loaded actor count; CPU/GPU clocks and levels; **system temperature at the end of each run**.
 4. **Conditions.** Always on USB power. The headset is assumed warm, however long it rested: no cool-down waits, no warm-up, no cool vs hot modes or corrections. Temperature and clocks are recorded (item 3), not controlled.
 5. **Perf log on demand.** In devtools builds, the console command `perf log on|off` turns on a 1-per-second summary line (frame phases, render-worker time, draws, passes, actors drawn/culled, live particles), instead of only logging dips. The leftover 2026-09-20 diagnostics (`[passdump]`, dip lines, the `VR swapchain handoff` zone) move behind this same switch. Release builds log and listen for nothing new.
+   - The line also counts how many display periods each frame stayed on screen (from the runtime's predicted display times: 1 = on time, 2+ = missed), which gives the share of frames at the display rate and the 1% low.
+   - While the switch is on, `[gpuprof]` also lists each pass's draw count (Aurora change, on our Aurora branch), and `perf mark` flushes it.
 6. **Comparison.** `tools/bench.sh compare <runA> <runB>` prints per-scene deltas, with each scene's measured run-to-run noise beside them, so a change smaller than the noise reads as "no change".
 7. **Repeatability gate.** Run the same scene 3 times back to back: average FPS agrees within ±2 and GPU frame time within ±5% for each viewpoint. Until that holds, nothing measured with the harness counts.
 
@@ -60,7 +64,7 @@ From `vr-mod-notes` (2026-09-16 … 09-20) and specs 08/10:
 15. Daniel picks which fixes to do; each becomes its own spec, and its verification is "before/after on the benchmark".
 
 ## Settings
-None for players. Devtools-only console commands: `perf log on|off`, `perf off|on <part>`.
+None for players. Devtools-only console commands: `perf log on|off`, `perf mark <name>`, `perf off|on <part>` (phase B), `save copy 1 3`, `save load 3`, `wait settled`, `expect actors <n>`.
 
 ## Verification
 1. With the game started (Daniel puts the headset on to launch it), `tools/bench.sh all` runs unattended under `tools/headset.sh awake` and produces a complete summary for every scene; `normal` afterwards.

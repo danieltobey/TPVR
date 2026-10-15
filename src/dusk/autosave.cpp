@@ -3,6 +3,7 @@
 #include "dusk/ui/ui.hpp"
 #include "imgui/ImGuiConsole.hpp"
 #include "mods/svc/save.hpp"
+#include "dusk/vr/vr_devtools_console.hpp"
 
 #include "d/actor/d_a_alink.h"
 #include "m_Do/m_Do_MemCard.h"
@@ -29,6 +30,13 @@ bool canAutoSave() {
     if (player->checkCargoCarry() || player->checkCanoeRide()) {
         return false;
     }
+
+#if DUSK_VR_DEVTOOLS
+    // Never auto-save during or after a scripted run (devtools remote console).
+    if (dusk::vr::devtools::hasRemoteControl()) {
+        return false;
+    }
+#endif
 
     return dusk::getSettings().game.autoSave && shouldAutoSave && mAutoSaveProc == 0 &&
            strcmp(dComIfGp_getStartStageName(), "F_SP102") != 0 &&

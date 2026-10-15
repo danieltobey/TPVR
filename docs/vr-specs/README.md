@@ -15,6 +15,7 @@ Spec-driven development for the TPVR comfort, lighting, audio and presentation w
 | ✅ Verified | Built, and every verification step passed in the headset |
 | 🟡 Built | Implemented and compiling, not yet (fully) verified |
 | 📝 Proposed | Spec written, awaiting approval; no code yet |
+| 🚧 In progress | Approved, being built |
 
 ## Specs
 
@@ -32,6 +33,6 @@ Spec-driven development for the TPVR comfort, lighting, audio and presentation w
 | [10 Dev tooling](10-dev-tooling.md) | ✅ Verified (horse deadzone / fill-light follow re-checks deferred) |
 | Anti-aliasing | 📝 To be specified |
 | 12 Dynamic resolution scaling (on `feature/dynamic-resolution`) | 📝 Proposed, on hold until spec 13 shows resolution matters |
-| [13 Performance investigation](13-performance-investigation.md) | 📝 Proposed (decisions recorded 2026-10-15) |
+| [13 Performance investigation](13-performance-investigation.md) | 🚧 Phase A in progress (approved 2026-10-15) |
 
 All behaviour here is VR-only; flatscreen play is unchanged. Upstream's Giant Screen view mode (2026-10) shows the flat game in the headset, and the immersive-VR fixes (lighting, sky, audio, movement) are off while it's selected.

@@ -34,6 +34,7 @@
 // specific and unused outside this file -- also D3D12-only below.
 
 #include "../../../extern/aurora/lib/webgpu/gpu_prof.hpp"  // aurora::webgpu::gpu_prof::Zone (GPU timing of the hand-off)
+#include <aurora/gfx.hpp>  // aurora::gfx::perf_diagnostics
 #include <openxr/openxr.h>
 #include <algorithm>
 #include <chrono>
@@ -42,6 +43,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -3415,7 +3417,17 @@ private:
         wgpu::CommandEncoder mutableCmd = cmd; // several calls below are non-const on CommandEncoder
         // GPU profiler zone (aurora gpu_prof, log mode on Android): the whole
         // hand-off -- gamma compute + buffer->texture copy -- as one zone.
-        const aurora::webgpu::gpu_prof::Zone gpuZone{cmd, "VR swapchain handoff"};
+        // Always in Tracy builds; otherwise only with perf diagnostics on
+        // (devtools `perf log on`, spec 13).
+        std::optional<aurora::webgpu::gpu_prof::Zone> gpuZone;
+#ifdef TRACY_ENABLE
+        constexpr bool kAlwaysZone = true;
+#else
+        constexpr bool kAlwaysZone = false;
+#endif
+        if (kAlwaysZone || aurora::gfx::perf_diagnostics()) {
+            gpuZone.emplace(cmd, "VR swapchain handoff");
+        }
 
         // TRIED AND REVERTED (Quest perf, 2026-09-20): replacing the identity
         // gamma compute + buffer->texture copy below with one

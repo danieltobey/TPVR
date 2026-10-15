@@ -56,6 +56,9 @@
 #include "dusk/vr/vr_devtools_console.hpp"    // DUSK_VR_DEVTOOLS: test driver (scripted input, head lock)
 #include "d/actor/d_a_horse.h"                // daHorse_c -- horse turn follow
 #include "dusk/interp/frame_interpolation.h"   // sim_tick_seq/get_interpolation_step
+#include "f_op/f_op_actor_tag.h"            // g_fopAcTg_Queue -- loaded actor count (perf log)
+#include <aurora/gfx.hpp>                    // worker_frame_stats, flush_gpu_prof_log (perf log)
+#include <string>
 
 // TEMP DIAGNOSTIC (VR black-screen-after-save investigation): plain,
 // unmangled, non-namespaced global mirroring g_renderedToHeadsetThisFrame
@@ -1364,10 +1367,10 @@ struct TickReentrancyGuard {
 };
 }  // namespace
 
-// TEMP DIAGNOSTIC (Quest perf, 2026-09-20 -- remove once the dips are
-// understood): per-frame phase timing, logged only on a slow frame (total
-// > kPerfDipThresholdMs, i.e. a real dip at 72Hz) plus one baseline line
-// every kPerfBaselineInterval frames so "normal" is on record too. Phases:
+// Per-frame phase timing (Quest perf, 2026-09-20; spec 13). Devtools builds
+// only, while `perf log on`: a 1-per-second average line (perfLogFrame) and
+// a DIP line for a slow frame (total > kPerfDipThresholdMs, i.e. a real dip
+// at 72Hz). Release builds measure nothing here. Phases:
 //   setup       = tick() entry -> swapchain image acquired (includes
 //                 xrWaitFrame's pacing wait -- big here = runtime pacing us)
 //   renderEnc   = both eyes' scene traversal + GX/Dawn command recording
@@ -1400,11 +1403,123 @@ inline void perfLap(int i) {
     g_perfMid[i] = std::chrono::duration<double, std::milli>(now - g_perfMidMark).count();
     g_perfMidMark = now;
 }
+#if DUSK_VR_DEVTOOLS
 constexpr double kPerfDipThresholdMs = 22.0;
-constexpr int kPerfBaselineInterval = 600;
+#endif
 inline double perfMs(PerfClock::time_point a, PerfClock::time_point b) {
     return std::chrono::duration<double, std::milli>(b - a).count();
 }
+
+#if DUSK_VR_DEVTOOLS
+// Perf log (spec 13, items 1b and 5): devtools builds only, and only while
+// `perf log on`. One line per second averages the frames since the last
+// line; a `perf mark <name>` closes the window early and logs the mark, so
+// tools/bench.sh can assign every line to one benchmark segment. The DIP
+// line above is logged too, for single frames over kPerfDipThresholdMs.
+struct PerfFrame {
+    double total, sim, setup, renderEnc, gap, sync, submit;
+    int simTicks;
+    unsigned int cullTested, cullRejected;
+    XrTime displayTime;
+    XrDuration displayPeriod;
+};
+struct PerfWindow {
+    PerfClock::time_point start{};
+    int frames = 0;
+    double total = 0, totalMax = 0, sim = 0, setup = 0, waitFrame = 0, swapWait = 0;
+    double renderEnc = 0, gap = 0, sync = 0, submit = 0, simTicks = 0;
+    double wEnc = 0, wFinish = 0, wSubmit = 0, wWall = 0;
+    double draws = 0, merged = 0, passes = 0, maxPassDraws = 0, cullTested = 0, cullRejected = 0;
+    // Frames by how many display periods they stayed on screen: 1 (on
+    // time), 2, 3, 4 or more.
+    unsigned int shown[4] = {};
+    int dips = 0;
+};
+PerfWindow g_perfWindow;
+XrTime g_perfPrevDisplayTime = 0;
+
+void perfFlushWindow(PerfClock::time_point now) {
+    PerfWindow& w = g_perfWindow;
+    if (w.frames > 0) {
+        const double n = w.frames;
+        char msg[800];
+        duskVrSnprintf(msg, sizeof(msg),
+            "[dusk::vr::perf] log frames=%d ms=%.0f total=%.2f totalMax=%.2f sim=%.2f setup=%.2f "
+            "waitFrame=%.2f swapWait=%.2f renderEnc=%.2f gap=%.2f sync=%.2f submit=%.2f simTicks=%.2f "
+            "wEnc=%.2f wFinish=%.2f wSubmit=%.2f wWall=%.2f draws=%.0f merged=%.0f passes=%.1f "
+            "maxPassDraws=%.0f cullTested=%.0f cullRejected=%.0f actors=%d particles=%d "
+            "shown1=%u shown2=%u shown3=%u shown4=%u dips=%d\n",
+            w.frames, perfMs(w.start, now), w.total / n, w.totalMax, w.sim / n, w.setup / n,
+            w.waitFrame / n, w.swapWait / n, w.renderEnc / n, w.gap / n, w.sync / n, w.submit / n,
+            w.simTicks / n, w.wEnc / n, w.wFinish / n, w.wSubmit / n, w.wWall / n, w.draws / n,
+            w.merged / n, w.passes / n, w.maxPassDraws / n, w.cullTested / n, w.cullRejected / n,
+            static_cast<int>(g_fopAcTg_Queue.mSize), dusk::vr::devtools::liveParticleCount(),
+            w.shown[0], w.shown[1], w.shown[2], w.shown[3], w.dips);
+        duskVrLog(msg);
+    }
+    w = PerfWindow{};
+    w.start = now;
+}
+
+// Once per submitted frame, at the end of submitFrame().
+void perfLogFrame(const PerfFrame& f, PerfClock::time_point now) {
+    std::string mark;
+    if (dusk::vr::devtools::takePerfMark(mark)) {
+        // The mark was sent during this frame's sim tick, so this frame
+        // already belongs to the new segment: close the old window first.
+        if (dusk::vr::devtools::perfLogOn()) {
+            perfFlushWindow(now);
+        }
+        aurora::gfx::flush_gpu_prof_log();
+        char msg[160];
+        duskVrSnprintf(msg, sizeof(msg), "[dusk::vr::perf] mark %s\n", mark.c_str());
+        duskVrLog(msg);
+    }
+    if (!dusk::vr::devtools::perfLogOn()) {
+        g_perfWindow = PerfWindow{};
+        g_perfPrevDisplayTime = 0;
+        return;
+    }
+    PerfWindow& w = g_perfWindow;
+    if (w.frames == 0 && w.start == PerfClock::time_point{}) {
+        w.start = now;
+    }
+    const aurora::gfx::WorkerFrameStats ws = aurora::gfx::worker_frame_stats();
+    ++w.frames;
+    w.total += f.total;
+    w.totalMax = std::max(w.totalMax, f.total);
+    w.sim += f.sim;
+    w.setup += f.setup;
+    w.waitFrame += g_perfWaitFrameMs;
+    w.swapWait += g_perfSwapWaitMs;
+    w.renderEnc += f.renderEnc;
+    w.gap += f.gap;
+    w.sync += f.sync;
+    w.submit += f.submit;
+    w.simTicks += f.simTicks;
+    w.wEnc += ws.encodeMs;
+    w.wFinish += ws.finishMs;
+    w.wSubmit += ws.submitMs;
+    w.wWall += ws.wallMs;
+    w.draws += ws.drawCalls;
+    w.merged += ws.mergedDrawCalls;
+    w.passes += ws.renderPasses;
+    w.maxPassDraws += ws.maxPassDraws;
+    w.cullTested += f.cullTested;
+    w.cullRejected += f.cullRejected;
+    if (f.total > kPerfDipThresholdMs) {
+        ++w.dips;
+    }
+    if (g_perfPrevDisplayTime != 0 && f.displayPeriod > 0 && f.displayTime > g_perfPrevDisplayTime) {
+        const long long periods = std::llround(double(f.displayTime - g_perfPrevDisplayTime) / double(f.displayPeriod));
+        ++w.shown[std::clamp(periods, 1LL, 4LL) - 1];
+    }
+    g_perfPrevDisplayTime = f.displayTime;
+    if (perfMs(w.start, now) >= 1000.0) {
+        perfFlushWindow(now);
+    }
+}
+#endif
 
 #if DUSK_VR_XR_GRAPHICS_VULKAN
 // ---------------------------------------------------------------------------
@@ -4058,24 +4173,34 @@ void submitFrame() {
     // so just reset them to keep the counters from growing all session.
     (void)dusk::interp::material::take_replay_stats();
 
-    // TEMP DIAGNOSTIC -- see the comment block above tick(). Log on a dip,
-    // plus a periodic baseline. Cull counters are read+reset here too.
+    // Perf diagnostics -- see the comment block above tick(). Devtools
+    // builds log them while `perf log on` (spec 13): a 1-per-second line,
+    // and a DIP line for a single slow frame. Cull counters are read+reset
+    // every frame either way.
     {
         const PerfClock::time_point perfEnd = PerfClock::now();
+        const unsigned int cullTested = g_duskVRCullTested;
+        const unsigned int cullRejected = g_duskVRCullRejected;
+        g_duskVRCullTested = 0;
+        g_duskVRCullRejected = 0;
+#if DUSK_VR_DEVTOOLS
+        static PerfClock::time_point s_prevPerfEnd{};
         const double setupMs = perfMs(g_perfTickStart, g_perfAfterAcquire);
         const double renderEncMs = perfMs(g_perfAfterAcquire, g_perfTickEnd);
         const double gapMs = perfMs(g_perfTickEnd, perfSubmitStart);
         const double syncMs = perfMs(perfSubmitStart, perfAfterSync);
         const double submitMs = perfMs(perfAfterSync, perfEnd);
         const double totalMs = perfMs(g_perfTickStart, perfEnd);
-        const unsigned int cullTested = g_duskVRCullTested;
-        const unsigned int cullRejected = g_duskVRCullRejected;
-        g_duskVRCullTested = 0;
-        g_duskVRCullRejected = 0;
-        static int s_perfFrame = 0;
-        ++s_perfFrame;
+        // Everything between the last frame's submit and this tick: the sim
+        // ticks and the rest of the game loop before the VR render.
+        const double simMs = s_prevPerfEnd == PerfClock::time_point{} ? 0.0 : perfMs(s_prevPerfEnd, g_perfTickStart);
+        s_prevPerfEnd = perfEnd;
+        perfLogFrame({totalMs, simMs, setupMs, renderEncMs, gapMs, syncMs, submitMs, g_perfNumSimTicks,
+                      cullTested, cullRejected, g_pendingSubmit.frameState.predictedDisplayTime,
+                      g_pendingSubmit.frameState.predictedDisplayPeriod},
+                     perfEnd);
         const bool dip = totalMs > kPerfDipThresholdMs;
-        if (dip || (s_perfFrame % kPerfBaselineInterval) == 0) {
+        if (dip && dusk::vr::devtools::perfLogOn()) {
             const aurora::gfx::WorkerFrameStats ws = aurora::gfx::worker_frame_stats();
             char msg[500];
             duskVrSnprintf(msg, sizeof(msg),
@@ -4084,13 +4209,20 @@ void submitFrame() {
                 "renderEnc=%.1f(preLoop=%.1f begin=%.1f iter=%.1f painter=%.1f end=%.1f) "
                 "gap=%.1f sync=%.1f submit=%.1f sim=%d cull=%u/%u "
                 "worker(enc=%.1f finish=%.1f submit=%.1f wall=%.1f draws=%u merged=%u passes=%u maxPassDraws=%u)\n",
-                dip ? "DIP" : "base", totalMs, setupMs, g_perfWaitFrameMs, g_perfSwapWaitMs,
+                "DIP", totalMs, setupMs, g_perfWaitFrameMs, g_perfSwapWaitMs,
                 g_perfMid[5], g_perfMid[1], g_perfMid[6], g_perfMid[0], g_perfMid[2], g_perfMid[3], g_perfMid[4],
                 renderEncMs, g_perfPreLoopMs, g_perfEyeBeginMs, g_perfEyeIterMs, g_perfEyePainterMs,
                 g_perfEyeEndMs, gapMs, syncMs, submitMs, g_perfNumSimTicks, cullRejected, cullTested,
                 ws.encodeMs, ws.finishMs, ws.submitMs, ws.wallMs, ws.drawCalls, ws.mergedDrawCalls, ws.renderPasses, ws.maxPassDraws);
             duskVrLog(msg);
         }
+#else
+        (void)cullTested;
+        (void)cullRejected;
+        (void)perfSubmitStart;
+        (void)perfAfterSync;
+        (void)perfEnd;
+#endif
     }
 }
 

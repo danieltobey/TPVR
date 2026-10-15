@@ -5,10 +5,20 @@
 #include "dusk/vr/vr_devtools_console.hpp"
 
 #include "d/d_com_inf_game.h"
+#include "d/d_kankyo.h"
+#include "d/d_particle.h"
+#include "d/d_stage.h"
 #include "dusk/commands.hpp"
+#include "dusk/game_mode.hpp"
+#include "dusk/mods/svc/save.hpp"
 #include "dusk/ui/ui.hpp"
 #include "dusk/vr/vr_debug_log.hpp"
 #include "dusk/vr/vr_devtools.hpp"
+#include "f_op/f_op_actor_tag.h"
+#include "m_Do/m_Do_MemCard.h"
+#include "m_Do/m_Do_MemCardRWmng.h"
+
+#include <aurora/gfx.hpp>
 
 #include <algorithm>
 #include <array>
@@ -21,6 +31,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace dusk::vr::devtools {
@@ -33,6 +44,13 @@ constexpr int kReadyTimeoutTicks = 60 * kTicksPerSecond;
 constexpr int kReadySettleTicks = kTicksPerSecond;
 // A screenshot needs the VR view to be rendering; give up after this long.
 constexpr int kShotTimeoutTicks = 5 * kTicksPerSecond;
+// `wait settled` (spec 13, item 1a): the actor count must hold this long, and
+// gives up after the timeout.
+constexpr int kSettledHoldTicks = 3 * kTicksPerSecond;
+constexpr int kSettledTimeoutTicks = 30 * kTicksPerSecond;
+// The only slot the save commands write to or load from (slot 1 is Daniel's
+// playthrough; card slot indices are 0-based).
+constexpr int kTestSlot = 2;
 
 struct ButtonName {
     const char* name;
@@ -71,7 +89,22 @@ struct Request {
     int readyElapsed = 0;
     bool waitShot = false;
     int shotElapsed = 0;
+    bool waitSettled = false;
+    int settledCount = -1;
+    int settledTicks = 0;
+    int settledElapsed = 0;
 };
+
+// Perf log switch and pending segment mark (spec 13, items 1b and 5), read by
+// vr_main.cpp's frame-end perf code.
+struct PerfState {
+    bool logOn = false;
+    std::string pendingMark;
+};
+PerfState& perf() {
+    static PerfState s;
+    return s;
+}
 
 std::deque<Request>& queue() {
     static std::deque<Request> q;
@@ -154,6 +187,157 @@ bool isWorldReady() {
            !dComIfGp_event_runCheck();
 }
 
+int loadedActorCount() {
+    return g_fopAcTg_Queue.mSize;
+}
+
+// --- Save commands (spec 13, item 1a) ---------------------------------------
+// The memory card runs on its own thread; these block the game for the
+// fraction of a second a card read or write takes, which is fine for a
+// scripted benchmark started from the title screen.
+using SaveClock = std::chrono::steady_clock;
+
+bool waitCardIdle() {
+    const SaveClock::time_point deadline = SaveClock::now() + std::chrono::seconds(5);
+    while (!mDoMemCd_isCardCommNone()) {
+        if (SaveClock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return true;
+}
+
+// Reads the card file's three quest logs into buf (SAVEFILE_SIZE bytes).
+bool readCard(u8* buf) {
+    // Load() only takes the request if it gets the card mutex; a taken
+    // request makes LoadSync() report "pending" (0) until the read is done.
+    // An immediate failure (2) may be a request that wasn't taken (stale
+    // state from an earlier operation): try again.
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        if (!waitCardIdle()) {
+            return false;
+        }
+        mDoMemCd_Load();
+        u32 status = mDoMemCd_LoadSync(buf, SAVEFILE_SIZE, 0);
+        if (status == 1) {
+            return true;
+        }
+        if (status == 2) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            continue;
+        }
+        const SaveClock::time_point deadline = SaveClock::now() + std::chrono::seconds(5);
+        while (SaveClock::now() < deadline) {
+            status = mDoMemCd_LoadSync(buf, SAVEFILE_SIZE, 0);
+            if (status != 0) {
+                return status == 1;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return false;
+    }
+    return false;
+}
+
+// `save copy 1 3`: the file select's Copy (dFile_select_c's copy command):
+// copy the quest log, set its checksum, write the card file.
+void saveCopy(Request& req) {
+    static u8 buf[SAVEFILE_SIZE];
+    if (!readCard(buf)) {
+        emit(req, "save copy: couldn't read the memory card");
+        return;
+    }
+    if (!mDoMemCdRWm_TestCheckSumGameData(buf)) {
+        emit(req, "save copy: slot 1 fails its checksum; nothing copied");
+        return;
+    }
+    if (!waitCardIdle()) {
+        emit(req, "save copy: the memory card is busy");
+        return;
+    }
+    memcpy(buf + kTestSlot * SAVEDATA_SIZE, buf, SAVEDATA_SIZE);
+    mDoMemCdRWm_SetCheckSumGameData(buf, kTestSlot);
+    mDoMemCd_setCopyToPos(kTestSlot);
+    mDoMemCd_save(buf, SAVEFILE_SIZE, 0);
+    const SaveClock::time_point deadline = SaveClock::now() + std::chrono::seconds(10);
+    while (SaveClock::now() < deadline) {
+        const s32 status = mDoMemCd_SaveSync();
+        if (status == 1) {
+            emit(req, "save copy: slot 1 copied to slot 3");
+            return;
+        }
+        if (status == 2) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    emit(req, "save copy: the card write failed");
+}
+
+// `save load 3`: what choosing slot 3 on the file select (or the command
+// line's save option, d_s_logo.cpp) does, minus the scene change: the script
+// warps next.
+void saveLoad(Request& req) {
+    static u8 buf[SAVEFILE_SIZE];
+    if (!readCard(buf)) {
+        emit(req, "save load: couldn't read the memory card");
+        return;
+    }
+    if (!mDoMemCdRWm_TestCheckSumGameData(buf + kTestSlot * SAVEDATA_SIZE)) {
+        emit(req, "save load: slot 3 is empty or fails its checksum (run tools/bench.sh copy-save)");
+        return;
+    }
+    dComIfGs_setCardToMemory(buf, kTestSlot);
+    // Loading at the title, unlike the file select: the title is a play
+    // stage, and leaving it (the warp) writes its region memory back into
+    // the save under its save-table number. Reload that region from the
+    // save just loaded, so the write-back keeps the save's own bytes.
+    if (stage_stag_info_class* stag = dComIfGp_getStageStagInfo()) {
+        dComIfGs_getSave(dStage_stagInfo_GetSaveTbl(stag));
+    }
+    dComIfGs_setNoFile(kTestSlot + 1);
+    dComIfGs_setDataNum(kTestSlot);
+    dusk::mods::svc::save_slot_loaded(kTestSlot);
+    if (const dusk::gamemode::GameMode* gameMode = dusk::gamemode::getGameModeManager().getCurrentGameMode()) {
+        gameMode->invokeOnSaveLoadedFunction();
+    }
+    dKy_clear_game_init();
+    dComIfGs_resetDan();
+    dComIfGs_setRestartRoomParam(0);
+    emit(req, "save load: slot 3 loaded");
+}
+
+void runSave(Request& req, const std::vector<std::string>& args) {
+    if (args.size() == 4 && args[1] == "copy" && args[2] == "1" && args[3] == "3") {
+        saveCopy(req);
+    } else if (args.size() == 3 && args[1] == "load" && args[2] == "3") {
+        saveLoad(req);
+    } else {
+        emit(req, "Usage: save copy 1 3 | save load 3 (slot 3 is the only test slot)");
+    }
+}
+
+// --- Perf commands (spec 13, items 1b and 5) ---------------------------------
+void runPerf(Request& req, const std::vector<std::string>& args) {
+    if (args.size() == 3 && args[1] == "log" && (args[2] == "on" || args[2] == "off")) {
+        perf().logOn = args[2] == "on";
+        // Aurora's leftover diagnostics ([passdump], per-pass draws in
+        // [gpuprof]) follow the same switch.
+        aurora::gfx::set_perf_diagnostics(perf().logOn);
+        emit(req, "perf log " + args[2]);
+        return;
+    }
+    if (args.size() == 3 && args[1] == "mark") {
+        // Logged by the frame-end perf code, after it closes the current
+        // window, so no summary line spans two segments.
+        perf().pendingMark = args[2];
+        emit(req, "perf mark " + args[2]);
+        return;
+    }
+    emit(req, "Usage: perf log on|off | perf mark <name>");
+}
+
 void runInput(Request& req, const std::vector<std::string>& args) {
     ScriptedInput& in = input();
     const std::string sub = args.size() > 1 ? args[1] : "";
@@ -197,8 +381,18 @@ void runInput(Request& req, const std::vector<std::string>& args) {
 }
 
 // Runs lines until the script has to wait or ends. Returns true when done.
+static bool s_remoteControl = false;
+
 bool step(Request& req) {
     static CommandState s_state;  // one for the session, like the in-game console
+
+    if (!s_remoteControl) {
+        s_remoteControl = true;
+        // Scripts warp straight from the title, where no file is loaded and
+        // the file number defaults to slot 1. Point it at slot 3 so even a
+        // stray save can't land in slot 1 (Daniel's playthrough).
+        dComIfGs_setDataNum(2);
+    }
 
     if (req.waitTicks > 0) {
         --req.waitTicks;
@@ -214,6 +408,20 @@ bool step(Request& req) {
         } else {
             return false;
         }
+    }
+    if (req.waitSettled) {
+        const int count = loadedActorCount();
+        if (count != req.settledCount) {
+            req.settledCount = count;
+            req.settledTicks = 0;
+        }
+        const bool held = ++req.settledTicks >= kSettledHoldTicks;
+        const bool timedOut = ++req.settledElapsed >= kSettledTimeoutTicks;
+        if (!held && !timedOut) {
+            return false;
+        }
+        emit(req, "actors " + std::to_string(count) + (held ? " settled" : " (still changing after 30 s)"));
+        req.waitSettled = false;
     }
     if (req.waitShot) {
         if (shotInProgress() && ++req.shotElapsed < kShotTimeoutTicks) {
@@ -238,6 +446,13 @@ bool step(Request& req) {
         }
         const std::string& cmd = args[0];
         if (cmd == "wait") {
+            if (args.size() == 2 && args[1] == "settled") {
+                req.waitSettled = true;
+                req.settledCount = -1;
+                req.settledTicks = 0;
+                req.settledElapsed = 0;
+                return false;
+            }
             if (args.size() == 2 && args[1] == "ready") {
                 req.waitReady = true;
                 req.readyTicks = 0;
@@ -246,7 +461,7 @@ bool step(Request& req) {
             }
             const auto t = args.size() == 2 ? parseFloat(args[1]) : std::nullopt;
             if (!t) {
-                emit(req, "Usage: wait <seconds> | wait ready");
+                emit(req, "Usage: wait <seconds> | wait ready | wait settled");
                 continue;
             }
             req.waitTicks = secondsToTicks(*t);
@@ -266,6 +481,31 @@ bool step(Request& req) {
         }
         if (cmd == "input") {
             runInput(req, args);
+            continue;
+        }
+        if (cmd == "save") {
+            runSave(req, args);
+            continue;
+        }
+        if (cmd == "perf") {
+            runPerf(req, args);
+            continue;
+        }
+        if (cmd == "actors" && args.size() == 1) {
+            emit(req, "actors " + std::to_string(loadedActorCount()));
+            continue;
+        }
+        if (cmd == "expect" && args.size() == 3 && args[1] == "actors") {
+            // tools/bench.sh marks the run invalid on "INVALID".
+            const auto min = parseFloat(args[2]);
+            const int count = loadedActorCount();
+            if (!min) {
+                emit(req, "Usage: expect actors <minimum>");
+            } else if (count >= *min) {
+                emit(req, "expect actors " + std::to_string(count) + " >= " + args[2] + " ok");
+            } else {
+                emit(req, "expect actors " + std::to_string(count) + " < " + args[2] + " INVALID");
+            }
             continue;
         }
         if (cmd == "menu" && args.size() == 2 && args[1] == "close") {
@@ -366,6 +606,28 @@ float takeScriptedTurnRad() {
 
 bool isHeadLocked() {
     return input().headLocked;
+}
+
+bool perfLogOn() {
+    return perf().logOn;
+}
+
+bool takePerfMark(std::string& name) {
+    if (perf().pendingMark.empty()) {
+        return false;
+    }
+    name = std::move(perf().pendingMark);
+    perf().pendingMark.clear();
+    return true;
+}
+
+int liveParticleCount() {
+    JPAEmitterManager* mgr = dPa_control_c::getEmitterManager();
+    return mgr != nullptr ? mgr->getParticleNumber() : 0;
+}
+
+bool hasRemoteControl() {
+    return s_remoteControl;
 }
 
 }  // namespace dusk::vr::devtools

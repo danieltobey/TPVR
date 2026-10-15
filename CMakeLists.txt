@@ -829,6 +829,8 @@ option(DUSK_VR "Build Dusklight VR mod" ON)
 option(DUSK_VR_DEVTOOLS "Build VR developer tooling" OFF)
 if (DUSK_VR AND DUSK_VR_DEVTOOLS)
     target_compile_definitions(dusklight PRIVATE DUSK_VR_DEVTOOLS=1)
+    # src/dusk/* (e.g. autosave.cpp's no-auto-save guard) builds in dusk_internal.
+    target_compile_definitions(dusk_internal PRIVATE DUSK_VR_DEVTOOLS=1)
     target_sources(dusklight PRIVATE src/dusk/vr/vr_devtools_console.cpp)
     message(STATUS "Dusklight VR: developer tooling ENABLED")
 endif ()

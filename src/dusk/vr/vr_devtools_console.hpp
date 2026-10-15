@@ -19,6 +19,11 @@
 //   head lock | head unlock         fixed head pose for repeatable views
 //   menu close                      close open menus (they block game input)
 //   metrics start | metrics stop    mark a measurement window (scenario.sh records it)
+//   wait settled                    pause until the loaded actor count holds for 3 s
+//   actors | expect actors <n>      print the loaded actor count / check a minimum
+//   save copy 1 3 | save load 3     copy slot 1 to the test slot / load the test slot
+//   perf log on|off                 1-per-second perf summary line (spec 13)
+//   perf mark <name>                start a benchmark segment (closes the perf windows)
 //   crash                           crash the game on purpose (tests tools/crash.sh)
 // Requests run one at a time, in arrival order.
 
@@ -27,6 +32,8 @@
 #if DUSK_VR_DEVTOOLS
 
 #include <dolphin/pad.h>
+
+#include <string>
 
 namespace dusk::vr::devtools {
 
@@ -46,6 +53,22 @@ float takeScriptedTurnRad();
 
 // `head lock`: render from a fixed head pose instead of the tracked one.
 bool isHeadLocked();
+
+// True once any remote command has run this session. Auto-save is off from
+// then on (dusk/autosave.cpp), so scripted runs never write Daniel's saves;
+// slot 1 is his playthrough and must never be overwritten.
+bool hasRemoteControl();
+
+// `perf log on|off` (spec 13, item 5): vr_main.cpp logs its 1-per-second
+// perf line (and dip lines) only while this is on.
+bool perfLogOn();
+
+// `perf mark <name>` (spec 13, item 1b): the name of a segment mark sent
+// since the last call, if any. vr_main.cpp flushes its window, then logs it.
+bool takePerfMark(std::string& name);
+
+// Particles alive now (for the perf line).
+int liveParticleCount();
 
 }  // namespace dusk::vr::devtools
 
