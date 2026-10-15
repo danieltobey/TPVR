@@ -1,6 +1,6 @@
 # 12 Dynamic resolution scaling
 
-**Status:** 📝 Proposed (draft 2026-10-02, awaiting approval; open questions at the end).
+**Status:** 📝 Proposed (draft 2026-10-02), **on hold** (Daniel, 2026-10-15): not considered until spec 13's performance investigation confirms that resolution has a significant impact on frame time; then re-discussed. Open question 4 (foveation) is answered in spec 13: not possible on this renderer.
 
 ## Problem
 Render resolution is fixed for the whole session (spec 08: VR Render Resolution, read once at startup). Busy areas run below the headset's 72 Hz: central Ordon Village was measured at ~65 FPS, GPU-bound (CHANGES.md, *Performance*). Below 72 FPS the compositor repeats or reprojects frames, which shows as judder. Quiet areas have GPU headroom that goes unused. A resolution that drops a little in heavy scenes and comes back up in light ones would hold 72 FPS without lowering image quality everywhere.
