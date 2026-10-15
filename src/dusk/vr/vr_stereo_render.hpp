@@ -79,6 +79,7 @@ wgpu::Texture ensure_external_copy_texture(const void* dest, uint32_t width, uin
 #include "m_Do/m_Do_mtx.h"         // mDoMtx_multVec() -- drawAimCrosshair()
 #include <dolphin/mtx.h>           // C_MTXPerspective, mDoMtx_lookAt (or equivalent)
 #include <dolphin/gx.h>            // GXBegin/GXEnd/etc. -- drawHudBillboard()
+#include "m_Do/m_Do_graphic.h" // FB_WIDTH/HEIGHT for the flat-screen composition.
 #include <JSystem/J3DGraphBase/J3DSys.h> // j3dSys.setViewMtx()
 
 #include <algorithm>
@@ -786,6 +787,38 @@ inline aurora::gfx::ResolvedTargets endEye() {
     // Pass it to vr_xr_submit::submitEye() once that file is written.
 }
 
+// The screen-mode scene uses one protected 16:9 game-camera pass, then shares
+// its resolved image between the two eye billboards.
+inline uint64_t g_screenModePassId = 0;
+inline wgpu::TextureView g_screenModePassColorView;
+
+inline bool beginScreenModePass(uint32_t width, uint32_t height) {
+    AuroraGXSync();
+    aurora::gfx::set_offscreen_uses_native_logical_size(true);
+    const bool ok = aurora::gfx::create_pass(width, height);
+    assert(ok && "VR screen mode: create_pass failed");
+    if (!ok) {
+        aurora::gfx::set_offscreen_uses_native_logical_size(false);
+        return false;
+    }
+
+    g_screenModePassId = aurora::gfx::current_pass_id();
+    g_screenModePassColorView = aurora::gfx::current_pass_color_view();
+    aurora::gfx::set_protected_offscreen_pass(g_screenModePassId);
+    return true;
+}
+
+inline aurora::gfx::ResolvedTargets endScreenModePass() {
+    aurora::gfx::ResolvedTargets targets;
+    const bool ok = aurora::gfx::resolve_pass_checked(
+        {.color = true, .depth = false}, targets, g_screenModePassId, g_screenModePassColorView);
+    aurora::gfx::set_offscreen_uses_native_logical_size(false);
+    aurora::gfx::clear_protected_offscreen_pass();
+    g_screenModePassId = 0;
+    g_screenModePassColorView = nullptr;
+    return ok ? targets : aurora::gfx::ResolvedTargets{};
+}
+
 // ---------------------------------------------------------------------------
 // Single-pass stereo (VR_SINGLE_PASS_STEREO_PLAN.md, 2026-09-20)
 //
@@ -836,8 +869,17 @@ inline XrFovf unionFov(const XrFovf& a, const XrFovf& b) {
 // ResolvedTargets simply refer to it. Measured reason (aurora GPU profiler,
 // 2026-09-20): the pooled-texture route cost a 0.6ms snapshot copy plus a
 // ~4ms identity gamma-compute + copy hand-off per frame on the Quest 3.
-inline aurora::gfx::ResolvedTargets beginStereoPass(const StereoParams& sp,
-                                                    const aurora::gfx::ExternalPassTarget* external = nullptr) {
+// beginStereoPass() in two halves. prepareStereoView() does all the
+// CPU-side view setup (V_c, j3dSys view, the per-eye correction, culling
+// frustum) and touches no GX state, so work that has to see this frame's
+// view but must run before the pass opens (VR shadow maps: their render
+// opens its own framebuffer) can sit between it and openStereoPass().
+struct StereoViewSetup {
+    float projVec[2][6];
+    Mtx   eyeT[2];
+};
+
+inline StereoViewSetup prepareStereoView(const StereoParams& sp) {
     view_class* view = dComIfGd_getView();
     assert(view != nullptr && "VR: no active view_class -- called outside gameplay?");
 
@@ -867,8 +909,9 @@ inline aurora::gfx::ResolvedTargets beginStereoPass(const StereoParams& sp,
     // setting.
     constexpr bool kStereoDebugMono = false;
 
-    float projVec[2][6];
-    Mtx   eyeT[2];
+    StereoViewSetup setup;
+    float (&projVec)[2][6] = setup.projVec;
+    Mtx (&eyeT)[2] = setup.eyeT;
     for (int eye = 0; eye < 2; ++eye) {
         Mtx eyeView;
         const int srcEye = kStereoDebugMono ? 0 : eye;
@@ -943,7 +986,11 @@ inline aurora::gfx::ResolvedTargets beginStereoPass(const StereoParams& sp,
         g_eyeSymmetricFovyDeg = clipperFovyDeg;
         g_eyeSymmetricAspect = clipperAspect;
     }
+    return setup;
+}
 
+inline aurora::gfx::ResolvedTargets openStereoPass(const StereoParams& sp, const StereoViewSetup& setup,
+                                                   const aurora::gfx::ExternalPassTarget* external = nullptr) {
     // Everything the FIFO thread needs rides the GX stream, in order: no
     // AuroraGXSync() drain here (beginEye() needed two per frame purely to
     // sequence the native-logical-size flag against queued commands --
@@ -951,7 +998,7 @@ inline aurora::gfx::ResolvedTargets beginStereoPass(const StereoParams& sp,
     // once, which is what processes these before the pass opens.
     GXFlush();
     GXSetOffscreenNativeLogicalSize(GX_TRUE);
-    GXSetStereo(GX_TRUE, projVec[0], projVec[1], &eyeT[0][0][0], &eyeT[1][0][0]);
+    GXSetStereo(GX_TRUE, setup.projVec[0], setup.projVec[1], &setup.eyeT[0][0][0], &setup.eyeT[1][0][0]);
 
     // One double-wide pass. The game's native-resolution GXSetViewport/
     // GXSetScissor calls scale up to the full double-wide extent (see
@@ -965,6 +1012,12 @@ inline aurora::gfx::ResolvedTargets beginStereoPass(const StereoParams& sp,
     g_currentEyeColorView = aurora::gfx::current_pass_color_view();
     aurora::gfx::set_protected_offscreen_pass(g_currentEyePassId);
     return {};
+}
+
+inline aurora::gfx::ResolvedTargets beginStereoPass(const StereoParams& sp,
+                                                    const aurora::gfx::ExternalPassTarget* external = nullptr) {
+    const StereoViewSetup setup = prepareStereoView(sp);
+    return openStereoPass(sp, setup, external);
 }
 
 // `wantDepth`: also snapshot the pass's depth into an R32Float texture
@@ -1214,13 +1267,124 @@ inline HudQuadCorners computeHudPose() {
     return computeBillboardPose(g_hudSmoothedWorldForward, dist, halfW, halfH);
 }
 
+// "HUD on Left Arm" (game.vrHudOnLeftArm): a watch-style panel lying flat on
+// the back of the tracked left hand, shown only while you raise the back of
+// your hand toward your eyes (the "check your watch" motion).
+//
+// Placement: centered kArmHudOffBackMeters out from the grip along the
+// back-of-hand normal, lying in the plane perpendicular to that normal.
+// Its "up" is the eye's up projected onto that plane, so the text stays
+// upright however the wrist is rolled. Untested starting values -- tune
+// in-headset.
+inline constexpr float kArmHudWidthMeters = 0.20f;
+inline constexpr float kArmHudHeightMeters = kArmHudWidthMeters * (448.0f / 608.0f);
+inline constexpr float kArmHudOffBackMeters = 0.05f;
+// Visibility: the back of the hand must face the eye (angle between the
+// normal and the hand->eye direction) AND the hand must be near the centre
+// of view. Separate show/hide angles give hysteresis so it doesn't flicker
+// at the edge.
+inline constexpr float kArmHudFacingShowDeg = 40.f, kArmHudFacingHideDeg = 55.f;
+inline constexpr float kArmHudInViewShowDeg = 30.f, kArmHudInViewHideDeg = 40.f;
+inline constexpr float kArmHudFadeSec = 0.15f;
+
+inline bool g_armHudLooking = false;  // hysteresis state, updated per eye draw
+inline float g_armHudFade = 0.f;      // 0..1, advanced once per frame
+
+// Once per frame from tick(): eases the fade toward the looking state.
+inline void updateArmHudFade(float dtSeconds) {
+    const float step = kArmHudFadeSec > 0.f ? dtSeconds / kArmHudFadeSec : 1.f;
+    if (g_armHudLooking) {
+        g_armHudFade = std::min(1.f, g_armHudFade + step);
+    } else {
+        g_armHudFade = std::max(0.f, g_armHudFade - step);
+    }
+}
+
+// Returns false if the panel shouldn't be drawn for this eye at all.
+inline bool computeArmHudPose(const cXyz& handWorldPos, const cXyz& backNormalWorld,
+                              HudQuadCorners& c) {
+    view_class* view = dComIfGd_getView();
+    assert(view != nullptr && "VR: computeArmHudPose() called outside gameplay?");
+    const Mtx& m = view->viewMtx;
+
+    // Normal into eye space (rotation only).
+    float nx = m[0][0] * backNormalWorld.x + m[0][1] * backNormalWorld.y + m[0][2] * backNormalWorld.z;
+    float ny = m[1][0] * backNormalWorld.x + m[1][1] * backNormalWorld.y + m[1][2] * backNormalWorld.z;
+    float nz = m[2][0] * backNormalWorld.x + m[2][1] * backNormalWorld.y + m[2][2] * backNormalWorld.z;
+    const float nLen = std::sqrt(nx * nx + ny * ny + nz * nz);
+    if (nLen < 1e-4f) return false;
+    nx /= nLen; ny /= nLen; nz /= nLen;
+
+    const float off = kArmHudOffBackMeters * kHudUnitsPerMetre;
+    const cXyz centerWorld(handWorldPos.x + backNormalWorld.x / nLen * off,
+                           handWorldPos.y + backNormalWorld.y / nLen * off,
+                           handWorldPos.z + backNormalWorld.z / nLen * off);
+    cXyz e;
+    mDoMtx_multVec(view->viewMtx, &centerWorld, &e);
+    const float dist = std::sqrt(e.x * e.x + e.y * e.y + e.z * e.z);
+    if (dist < 1.f || e.z >= -1.f) {
+        g_armHudLooking = false;
+        return false;
+    }
+
+    // The eye sits at the origin of eye space, looking down -Z.
+    const float facingCos = -(nx * e.x + ny * e.y + nz * e.z) / dist;  // normal vs panel->eye
+    const float inViewCos = -e.z / dist;                               // forward vs eye->panel
+    const auto cosDeg = [](float deg) { return std::cos(deg * 3.14159265f / 180.f); };
+    if (g_armHudLooking) {
+        g_armHudLooking = facingCos > cosDeg(kArmHudFacingHideDeg) &&
+                          inViewCos > cosDeg(kArmHudInViewHideDeg);
+    } else {
+        g_armHudLooking = facingCos > cosDeg(kArmHudFacingShowDeg) &&
+                          inViewCos > cosDeg(kArmHudInViewShowDeg);
+    }
+    // Never draw from behind (the texture would read mirrored).
+    if (facingCos <= 0.f) return false;
+
+    // Panel up = eye up projected onto the panel plane; right = up x normal.
+    float ux = -ny * nx, uy = 1.f - ny * ny, uz = -ny * nz;
+    float uLen = std::sqrt(ux * ux + uy * uy + uz * uz);
+    if (uLen < 1e-3f) {
+        // Normal points straight up/down in eye space: use eye forward-ish.
+        ux = 0.f; uy = 0.f; uz = -1.f; uLen = 1.f;
+    }
+    ux /= uLen; uy /= uLen; uz /= uLen;
+    const float rx = uy * nz - uz * ny;
+    const float ry = uz * nx - ux * nz;
+    const float rz = ux * ny - uy * nx;
+
+    const float hw = kArmHudWidthMeters * 0.5f * kHudUnitsPerMetre;
+    const float hh = kArmHudHeightMeters * 0.5f * kHudUnitsPerMetre;
+    const float sx[4] = {-1.f, 1.f, 1.f, -1.f};
+    const float sy[4] = {1.f, 1.f, -1.f, -1.f};  // TL, TR, BR, BL
+    for (int i = 0; i < 4; i++) {
+        c.x[i] = e.x + rx * hw * sx[i] + ux * hh * sy[i];
+        c.y[i] = e.y + ry * hw * sx[i] + uy * hh * sy[i];
+        c.z[i] = e.z + rz * hw * sx[i] + uz * hh * sy[i];
+    }
+    return true;
+}
+
 // Call once per eye, from mDoGph_Painter()'s per-eye HUD call site (replaces
 // the flat mDoGph_drawHud2D() call there while in VR). Must run after the
 // eye's real scene draw (so it draws on top) and needs `hudTex` already
 // populated for this frame by mDoGph_gInf_c::captureHudBillboard().
-inline void drawHudBillboard(TGXTexObj* hudTex) {
+// armHandPos/armBackNormal: when both non-null ("HUD on Left Arm"), the
+// panel sits on the back of the left hand and fades with g_armHudFade.
+inline void drawHudBillboard(TGXTexObj* hudTex, const cXyz* armHandPos = nullptr,
+                             const cXyz* armBackNormal = nullptr) {
     view_class* view = dComIfGd_getView();
     assert(view != nullptr && "VR: drawHudBillboard() called outside gameplay?");
+    HudQuadCorners c;
+    float alphaScale = 1.f;
+    if (armHandPos != nullptr && armBackNormal != nullptr) {
+        // Run the pose (it updates the looking state) even while faded out.
+        const bool drawable = computeArmHudPose(*armHandPos, *armBackNormal, c);
+        alphaScale = g_armHudFade;
+        if (!drawable || alphaScale <= 0.01f) return;
+    } else {
+        c = computeHudPose();
+    }
 
     // GXSetProjection is a stateful register write, not automatic -- the 3D
     // world draw and the (skipped-in-VR, but still state-touching) HUD path
@@ -1263,7 +1427,7 @@ inline void drawHudBillboard(TGXTexObj* hudTex) {
     GXSetTevSwapModeTable(GX_TEV_SWAP2, GX_CH_RED, GX_CH_GREEN, GX_CH_BLUE, GX_CH_GREEN);
     GXSetTevSwapModeTable(GX_TEV_SWAP3, GX_CH_RED, GX_CH_GREEN, GX_CH_BLUE, GX_CH_BLUE);
 
-    GXSetNumTevStages(3);
+    GXSetNumTevStages(alphaScale < 1.f ? 4 : 3);
 
     // Stage 0: real color; alpha = texture's red channel (via SWAP1).
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
@@ -1289,6 +1453,19 @@ inline void drawHudBillboard(TGXTexObj* hudTex) {
     GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_TEXA, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
     GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
 
+    // Stage 3 (arm HUD fade only): alpha *= konst alpha.
+    if (alphaScale < 1.f) {
+        const GXColor fade = {0, 0, 0, static_cast<u8>(alphaScale * 255.f)};
+        GXSetTevKColor(GX_KCOLOR0, fade);
+        GXSetTevKAlphaSel(GX_TEVSTAGE3, GX_TEV_KASEL_K0_A);
+        GXSetTevOrder(GX_TEVSTAGE3, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
+        GXSetTevSwapMode(GX_TEVSTAGE3, GX_TEV_SWAP0, GX_TEV_SWAP0);
+        GXSetTevColorIn(GX_TEVSTAGE3, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
+        GXSetTevColorOp(GX_TEVSTAGE3, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevAlphaIn(GX_TEVSTAGE3, GX_CA_ZERO, GX_CA_APREV, GX_CA_KONST, GX_CA_ZERO);
+        GXSetTevAlphaOp(GX_TEVSTAGE3, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    }
+
     GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_SET);
     // Disabled Z-test/write: the panel always draws on top of the 3D world,
     // same as the flat ortho HUD it replaces (never occluded by scene
@@ -1299,7 +1476,6 @@ inline void drawHudBillboard(TGXTexObj* hudTex) {
 
     GXLoadTexObj(hudTex, GX_TEXMAP0);
 
-    const HudQuadCorners c = computeHudPose();
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     GXPosition3f32(c.x[0], c.y[0], c.z[0]); GXTexCoord2f32(0.0f, 0.0f);
     GXPosition3f32(c.x[1], c.y[1], c.z[1]); GXTexCoord2f32(1.0f, 0.0f);
@@ -1358,6 +1534,10 @@ inline void drawHudBillboard(TGXTexObj* hudTex) {
 inline constexpr float kMenuBillboardDistanceMeters = 0.9f; // 1.2 -> 0.9, see kHudDistanceMeters
 inline constexpr float kMenuBillboardWidthMeters = 1.0f;
 
+inline constexpr float kScreenModeDistanceMeters = 4.5f;
+inline constexpr float kScreenModeWidthMeters = 5.3f;
+
+
 // Height is NOT a compile-time constant like HUD's fixed 608:448 aspect --
 // RmlUi's canvas is OS-window-sized (any aspect, can change on resize), so
 // this is computed at draw time from the real render-target dimensions
@@ -1387,6 +1567,12 @@ inline u8 g_menuBillboardTexKey[4]{};
 inline TGXTexObj g_menuBillboardTexObj{};
 inline uint32_t g_menuBillboardTexWidth = 0;
 inline uint32_t g_menuBillboardTexHeight = 0;
+
+inline u8 g_screenModeTexKey[2][4]{};
+inline TGXTexObj g_screenModeTexObj[2]{};
+inline wgpu::Texture g_screenModeCopyTexture[2];
+inline uint32_t g_screenModeTexWidth = 0;
+inline uint32_t g_screenModeTexHeight = 0;
 
 // Solid opaque backdrop drawn directly behind the menu billboard --
 // 2026-08-20 follow-up ("darken the background... so it is readable"),
@@ -1632,6 +1818,155 @@ inline void ensureAndCopyMenuBillboardTexture() {
         menu_billboard_detail::s_copyTaskId = aurora::gfx::register_encoder_task_type(desc);
     }
     aurora::gfx::push_encoder_task(menu_billboard_detail::s_copyTaskId, nullptr, 0);
+}
+
+namespace screen_mode_detail {
+inline wgpu::Texture s_pendingCopySrc;
+inline wgpu::Texture s_pendingCopyDst;
+inline uint32_t s_pendingCopyWidth = 0;
+inline uint32_t s_pendingCopyHeight = 0;
+inline aurora::gfx::EncoderTaskId s_copyTaskId = aurora::gfx::InvalidEncoderTask;
+
+inline void copyEncoderTaskCallback(const aurora::gfx::EncoderTaskContext& /*ctx*/,
+                                     const wgpu::CommandEncoder& cmd, const void* /*payload*/,
+                                     size_t /*payloadSize*/, void* /*userdata*/) {
+    if (!s_pendingCopySrc || !s_pendingCopyDst) {
+        return;
+    }
+    wgpu::CommandEncoder mutableCmd = cmd;
+
+    wgpu::TexelCopyTextureInfo srcCopy{};
+    srcCopy.texture = s_pendingCopySrc;
+    srcCopy.aspect = wgpu::TextureAspect::All;
+
+    wgpu::TexelCopyTextureInfo dstCopy{};
+    dstCopy.texture = s_pendingCopyDst;
+    dstCopy.aspect = wgpu::TextureAspect::All;
+
+    wgpu::Extent3D extent{s_pendingCopyWidth, s_pendingCopyHeight, 1};
+    mutableCmd.CopyTextureToTexture(&srcCopy, &dstCopy, &extent);
+}
+} // namespace screen_mode_detail
+
+inline bool copyScreenModeTexture(const aurora::gfx::ResolvedTargets& targets, uint32_t width,
+                                  uint32_t height, int eye = 0) {
+    if (!targets.colorTexture || width == 0 || height == 0) {
+        return false;
+    }
+    const int slot = (eye == 1) ? 1 : 0;
+
+    if (!g_screenModeCopyTexture[slot] || g_screenModeTexWidth != width || g_screenModeTexHeight != height) {
+        AuroraGXSync();
+        g_screenModeCopyTexture[slot] =
+            aurora::gx::ensure_external_copy_texture(g_screenModeTexKey[slot], width, height, GX_TF_RGBA8);
+        if (!g_screenModeCopyTexture[slot]) {
+            return false;
+        }
+        GXInitTexObj(&g_screenModeTexObj[slot], g_screenModeTexKey[slot], width, height, GX_TF_RGBA8,
+                     GX_CLAMP, GX_CLAMP, GX_FALSE);
+        g_screenModeTexWidth = width;
+        g_screenModeTexHeight = height;
+    }
+
+    screen_mode_detail::s_pendingCopySrc = targets.colorTexture;
+    screen_mode_detail::s_pendingCopyDst = g_screenModeCopyTexture[slot];
+    screen_mode_detail::s_pendingCopyWidth = width;
+    screen_mode_detail::s_pendingCopyHeight = height;
+    if (screen_mode_detail::s_copyTaskId == aurora::gfx::InvalidEncoderTask) {
+        aurora::gfx::EncoderTaskDescriptor desc{
+            .label = "vr_screen_mode_copy",
+            .callback = &screen_mode_detail::copyEncoderTaskCallback,
+            .userdata = nullptr,
+        };
+        screen_mode_detail::s_copyTaskId = aurora::gfx::register_encoder_task_type(desc);
+    }
+    aurora::gfx::push_encoder_task(screen_mode_detail::s_copyTaskId, nullptr, 0);
+    return true;
+}
+
+inline void drawScreenModeBillboard(int eye = 0) {
+    if (g_screenModeTexWidth == 0 || g_screenModeTexHeight == 0) {
+        return;
+    }
+    const int slot = (eye == 1 && g_screenModeCopyTexture[1]) ? 1 : 0;
+    TGXTexObj* activeTex = &g_screenModeTexObj[slot];
+
+    view_class* view = dComIfGd_getView();
+    assert(view != nullptr && "VR screen mode: no active view_class");
+    GXSetProjection(view->projMtx, GX_PERSPECTIVE);
+    GXLoadPosMtxImm(cMtx_getIdentity(), GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+    GXSetNumChans(0);
+    GXSetNumTexGens(1);
+    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 0x3C);
+    GXSetNumTevStages(1);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_SET);
+    GXSetZMode(GX_DISABLE, GX_ALWAYS, GX_DISABLE);
+    GXSetCullMode(GX_CULL_NONE);
+    GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_OR, GX_ALWAYS, 0);
+    GXLoadTexObj(activeTex, GX_TEXMAP0);
+
+    const float halfW = kScreenModeWidthMeters * 0.5f * kHudUnitsPerMetre;
+    const float halfH = halfW * (9.0f / 16.0f);
+    const HudQuadCorners c = computeBillboardPose(
+        g_hudSmoothedWorldForward, kScreenModeDistanceMeters * kHudUnitsPerMetre, halfW, halfH);
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    GXPosition3f32(c.x[0], c.y[0], c.z[0]); GXTexCoord2f32(0.0f, 0.0f);
+    GXPosition3f32(c.x[1], c.y[1], c.z[1]); GXTexCoord2f32(1.0f, 0.0f);
+    GXPosition3f32(c.x[2], c.y[2], c.z[2]); GXTexCoord2f32(1.0f, 1.0f);
+    GXPosition3f32(c.x[3], c.y[3], c.z[3]); GXTexCoord2f32(0.0f, 1.0f);
+    GXEnd();
+}
+
+inline void drawMenuScreenOverlay() {
+    if (g_menuBillboardTexWidth == 0 || g_menuBillboardTexHeight == 0) {
+        return;
+    }
+
+    Mtx44 projection;
+    C_MTXOrtho(projection, 0.0f, static_cast<float>(FB_HEIGHT), 0.0f,
+               static_cast<float>(FB_WIDTH), 0.0f, -1.0f);
+    GXSetProjection(projection, GX_ORTHOGRAPHIC);
+    GXLoadPosMtxImm(cMtx_getIdentity(), GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
+    GXSetViewport(0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f);
+    GXSetScissor(0, 0, FB_WIDTH, FB_HEIGHT);
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+    GXSetNumChans(0);
+    GXSetNumTexGens(1);
+    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 0x3C);
+    GXSetNumTevStages(1);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetBlendMode(GX_BM_BLEND, GX_BL_ONE, GX_BL_INVSRCALPHA, GX_LO_SET);
+    GXSetZMode(GX_DISABLE, GX_ALWAYS, GX_DISABLE);
+    GXSetCullMode(GX_CULL_NONE);
+    GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_OR, GX_ALWAYS, 0);
+    GXLoadTexObj(&g_menuBillboardTexObj, GX_TEXMAP0);
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    GXPosition3f32(0.0f, 0.0f, 0.0f); GXTexCoord2f32(0.0f, 0.0f);
+    GXPosition3f32(static_cast<float>(FB_WIDTH), 0.0f, 0.0f); GXTexCoord2f32(1.0f, 0.0f);
+    GXPosition3f32(static_cast<float>(FB_WIDTH), static_cast<float>(FB_HEIGHT), 0.0f);
+    GXTexCoord2f32(1.0f, 1.0f);
+    GXPosition3f32(0.0f, static_cast<float>(FB_HEIGHT), 0.0f); GXTexCoord2f32(0.0f, 1.0f);
+    GXEnd();
 }
 
 // ---------------------------------------------------------------------------

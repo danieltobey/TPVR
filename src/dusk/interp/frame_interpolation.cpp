@@ -251,6 +251,20 @@ bool lookup_replacement(const void* key, Mtx out) {
     return true;
 }
 
+bool lookup_interpolated(const void* key, Mtx out) {
+    if (presentation_sync_active() || !s_replacementsActive || key == nullptr) {
+        return false;
+    }
+
+    auto it = g_replacements.find(reinterpret_cast<uintptr_t>(key));
+    if (it == g_replacements.end()) {
+        return false;
+    }
+
+    MTXCopy(it->second, out);
+    return true;
+}
+
 void mark_live_this_frame(const void* key) {
     if (key != nullptr) {
         g_live_this_frame_keys.insert(reinterpret_cast<uintptr_t>(key));

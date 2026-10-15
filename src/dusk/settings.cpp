@@ -88,8 +88,14 @@ UserSettings g_userSettings = {
         .disableLetterboxing {"game.disableLetterboxing", LetterboxMode::Off},
         .enableHighQualityMinimapTextures {"game.enableHighQualityMinimapTextures", true},
         .vrDesktopMirror {"game.vrDesktopMirror", true},
+        .vrScreenMode {"game.vrScreenMode", false},
+        .vrScreenModeStereo {"game.vrScreenModeStereo", false},
+        .vrScreenModeDepth {"game.vrScreenModeDepth", 1.0f},
         .vrSinglePassStereo {"game.vrSinglePassStereo", true},
         .vrRenderScale {"game.vrRenderScale", 1.0f},
+        .vrHighClocks {"game.vrHighClocks", true},
+        .vrDisplayRefreshRate {"game.vrDisplayRefreshRate", 72},
+        .vrSuperResolution {"game.vrSuperResolution", true},
         .vrSpaceWarp {"game.vrSpaceWarp", false},
         .vrSpaceWarpDebugNegateMv {"game.vrSpaceWarpDebugNegateMv", false},
         .vrSpaceWarpDebugFlipMvY {"game.vrSpaceWarpDebugFlipMvY", false},
@@ -100,8 +106,15 @@ UserSettings g_userSettings = {
         .vrSpaceWarpDebugReversedDepth {"game.vrSpaceWarpDebugReversedDepth", false},
         .vrSpaceWarpDebugRawProbe {"game.vrSpaceWarpDebugRawProbe", false},
         .vrShowBody {"game.vrShowBody", false},
+        .vrHudOnLeftArm {"game.vrHudOnLeftArm", false},
+        .vrShadows {"game.vrShadows", false},
+        .vrFullBody {"game.vrFullBody", true},
+        .vrFullBodyHeadAnchor {"game.vrFullBodyHeadAnchor", true},
+        .vrFullBodyShowRolls {"game.vrFullBodyShowRolls", false},
+        .vrArmStretchMax {"game.vrArmStretchMax", 1.25f},
         .vrThirdPerson {"game.vrThirdPerson", false},
         .vrThirdPersonFollowCameraYaw {"game.vrThirdPersonFollowCameraYaw", true},
+        .vrZTargetCameraFocus {"game.vrZTargetCameraFocus", true},
         .vrAttachBodyRotationToHead {"game.vrAttachBodyRotationToHead", false},
         .vrExperimentalCutsceneFirstPerson {"game.vrExperimentalCutsceneFirstPerson", false},
         .vrSwapSwordShieldHands {"game.vrSwapSwordShieldHands", false},
@@ -169,7 +182,6 @@ UserSettings g_userSettings = {
         .vrLightingMode {"game.vrLightingMode", VrLightingMode::SunMoon},
         .vrCutsceneFaceCamera {"game.vrCutsceneFaceCamera", true},
         .vrHorseTurnView {"game.vrHorseTurnView", true},
-        .vrZTargetLockView {"game.vrZTargetLockView", true},
         .vrCutsceneFollowTurns {"game.vrCutsceneFollowTurns", true},
         .vrCutsceneView {"game.vrCutsceneView", VrCutsceneView::Window},
         .vrHudDistance {"game.vrHudDistance", 90},
@@ -415,8 +427,14 @@ void registerSettings() {
     Register(g_userSettings.game.disableLetterboxing);
     Register(g_userSettings.game.enableHighQualityMinimapTextures);
     Register(g_userSettings.game.vrDesktopMirror);
+    Register(g_userSettings.game.vrScreenMode);
+    Register(g_userSettings.game.vrScreenModeStereo);
+    Register(g_userSettings.game.vrScreenModeDepth);
     Register(g_userSettings.game.vrSinglePassStereo);
     Register(g_userSettings.game.vrRenderScale);
+    Register(g_userSettings.game.vrHighClocks);
+    Register(g_userSettings.game.vrDisplayRefreshRate);
+    Register(g_userSettings.game.vrSuperResolution);
     Register(g_userSettings.game.vrSpaceWarp);
     Register(g_userSettings.game.vrSpaceWarpDebugNegateMv);
     Register(g_userSettings.game.vrSpaceWarpDebugFlipMvY);
@@ -427,8 +445,15 @@ void registerSettings() {
     Register(g_userSettings.game.vrSpaceWarpDebugReversedDepth);
     Register(g_userSettings.game.vrSpaceWarpDebugRawProbe);
     Register(g_userSettings.game.vrShowBody);
+    Register(g_userSettings.game.vrHudOnLeftArm);
+    Register(g_userSettings.game.vrShadows);
+    Register(g_userSettings.game.vrFullBody);
+    Register(g_userSettings.game.vrFullBodyHeadAnchor);
+    Register(g_userSettings.game.vrFullBodyShowRolls);
+    Register(g_userSettings.game.vrArmStretchMax);
     Register(g_userSettings.game.vrThirdPerson);
     Register(g_userSettings.game.vrThirdPersonFollowCameraYaw);
+    Register(g_userSettings.game.vrZTargetCameraFocus);
     Register(g_userSettings.game.vrAttachBodyRotationToHead);
     Register(g_userSettings.game.vrExperimentalCutsceneFirstPerson);
     Register(g_userSettings.game.vrSwapSwordShieldHands);
@@ -455,7 +480,6 @@ void registerSettings() {
     Register(g_userSettings.game.vrLightingMode);
     Register(g_userSettings.game.vrCutsceneFaceCamera);
     Register(g_userSettings.game.vrHorseTurnView);
-    Register(g_userSettings.game.vrZTargetLockView);
     Register(g_userSettings.game.vrCutsceneFollowTurns);
     Register(g_userSettings.game.vrCutsceneView);
     Register(g_userSettings.game.vrHudDistance);

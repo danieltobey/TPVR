@@ -21,7 +21,7 @@
 #include <windows.h>
 #endif
 #include "dusk/vr/vr_debug_log.hpp"  // dusk::vr::duskVrLog/duskVrSnprintf -- portable OutputDebugStringA/_snprintf_s stand-ins
-extern "C" bool g_duskVRRenderingToHeadset;
+#include "dusk/vr/vr_main.hpp"
 #include "helpers/gx_helper.h"
 
 #include "d/d_menu_collect.h"
@@ -1087,8 +1087,13 @@ void dDlst_shadowReal_c::reset() {
 
 void dDlst_shadowReal_c::imageDraw(Mtx param_0) {
 #ifdef TARGET_PC
+    // VR: set() runs every frame there (the VR shadow step), so mViewMtx/
+    // mRenderProjMtx are this frame's. draw() can't use the interpolated
+    // receiver matrix in VR, so the map has to be rendered with the same
+    // raw matrices or the two disagree and the shadow slides off its caster.
+    const bool useInterp = !dusk::vr::isImmersiveVr();
     Mtx render_proj_mtx;
-    if (dusk::interp::lookup_replacement(getInterpKey(mpModels[0], 2), render_proj_mtx)) {
+    if (useInterp && dusk::interp::lookup_replacement(getInterpKey(mpModels[0], 2), render_proj_mtx)) {
         GXSetProjection(render_proj_mtx, GX_ORTHOGRAPHIC);
     } else
 #endif
@@ -1109,7 +1114,7 @@ void dDlst_shadowReal_c::imageDraw(Mtx param_0) {
                 shape_pkt = (*models)->getShapePacket(j);
 #ifdef TARGET_PC
                 Mtx view_mtx;
-                if (dusk::interp::lookup_replacement(getInterpKey(mpModels[0], 1), view_mtx)) {
+                if (useInterp && dusk::interp::lookup_replacement(getInterpKey(mpModels[0], 1), view_mtx)) {
                     shape_pkt->setBaseMtxPtr(&view_mtx);
                 } else
 #endif
@@ -1127,25 +1132,10 @@ void dDlst_shadowReal_c::imageDraw(Mtx param_0) {
 
 void dDlst_shadowReal_c::draw() {
 #if TARGET_PC
-    // ROOT-CAUSED 2026-08-09: this is what the user had been calling
-    // "cloud shadows on the ground" -- turned out to have nothing to do
-    // with clouds/weather at all (two separate, unrelated weather-related
-    // systems were investigated and ruled out first via a real log
-    // capture -- see vr-mod-notes section 23's cloud-shadow writeup).
-    // This "Real" (projected-texture blob) shadow system -- cast by
-    // buildings/NPCs/props onto the ground, distinct from
-    // dDlst_shadowSimple_c's stencil-volume shadows -- was NEVER actually
-    // covered by this project's documented "shadows are intentionally
-    // disabled in VR" guard (CLAUDE.md's permanent constraint): only
-    // dDlst_shadowSimple_c::draw() got that early-return. Here, only
-    // defensive frame-interp fixes were applied (the have_view_mtx/
-    // have_recv_proj_mtx checks below) -- the actual draw call itself was
-    // never gated, confirmed by a real [dusk::shadow]/[dusk::realshadow]
-    // log capture showing VR=1 lines firing throughout an active VR
-    // session. Disabling here COMPLETES, rather than reverses, the
-    // existing "shadows disabled in VR" intent already applied to Simple
-    // shadows -- not a new exception.
-    if (g_duskVRRenderingToHeadset) {
+    // VR: drawn only when the "Shadows" VR setting built this frame's
+    // shadows (dusk::vr::areVrShadowsActive()). Without that step the shadow
+    // maps are never rendered in VR and the list holds duplicates.
+    if (dusk::vr::isImmersiveVr() && !dusk::vr::areVrShadowsActive()) {
         return;
     }
 #endif
@@ -1164,9 +1154,9 @@ void dDlst_shadowReal_c::draw() {
     // its comment) -- same frame-interpolation subsystem, same composite
     // phase that runs unconditionally regardless of VR state.
     Mtx view_mtx, recv_proj_mtx;
-    const auto have_view_mtx = !g_duskVRRenderingToHeadset &&
+    const auto have_view_mtx = !dusk::vr::isImmersiveVr() &&
         dusk::interp::lookup_replacement(getInterpKey(mpModels[0], 1), view_mtx);
-    const auto have_recv_proj_mtx = !g_duskVRRenderingToHeadset &&
+    const auto have_recv_proj_mtx = !dusk::vr::isImmersiveVr() &&
         dusk::interp::lookup_replacement(getInterpKey(mpModels[0], 3), recv_proj_mtx);
     if (have_view_mtx && have_recv_proj_mtx) {
         cMtx_concat(recv_proj_mtx, view_mtx, recv_proj_mtx);
@@ -1447,11 +1437,8 @@ static MtxP get_simple_shadow_mtx(Mtx worldMtx, const void* key, Mtx storage) {
 
 void dDlst_shadowSimple_c::draw() {
 #if TARGET_PC
-    // User request this session: hidden in VR alongside the complex shadow
-    // system (dComIfGd_drawShadow in m_Do_graphic.cpp) -- see that guard's
-    // comment for why. Re-disabled after a mistaken re-enable confirmed the
-    // stretching persists post-fix; do not re-enable without new evidence.
-    if (g_duskVRRenderingToHeadset) {
+    // VR: see dDlst_shadowReal_c::draw().
+    if (dusk::vr::isImmersiveVr() && !dusk::vr::areVrShadowsActive()) {
         return;
     }
 #endif
@@ -1462,15 +1449,8 @@ void dDlst_shadowSimple_c::draw() {
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
 #if TARGET_PC
-    // NOTE: dDlst_shadowSimple_c::draw() already returns early for VR at the
-    // top of this function (g_duskVRRenderingToHeadset check above) -- the
-    // stretching root-caused in an earlier session (re-concatenating an
-    // interpolated world-space matrix with whichever view matrix is live at
-    // draw() time, which breaks under VR's two rapidly-alternating per-eye
-    // view matrices) can no longer reach this code at all in VR, so
-    // get_simple_shadow_mtx()'s unconditional concat below is safe:
-    // flatscreen-only by construction, not because this helper itself knows
-    // about VR.
+    // In VR the view matrix here is the stereo pass's head-center view; the
+    // shader adds each eye's offset.
     Mtx volumeMtx;
     GXLoadPosMtxImm(get_simple_shadow_mtx(mVolumeMtx, mVolumeMtxKey, volumeMtx), GX_PNMTX0);
 #else
@@ -1737,8 +1717,10 @@ void dDlst_shadowControl_c::draw(Mtx param_0) {
     GXSetNumTevStages(1);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
 #ifdef TARGET_PC
+    // VR: param_0 is the stereo pass's own view matrix; the interpolated
+    // replacement under that key is the flatscreen camera's.
     Mtx draw_mtx;
-    if (dusk::interp::lookup_replacement(param_0, draw_mtx)) {
+    if (!dusk::vr::isImmersiveVr() && dusk::interp::lookup_replacement(param_0, draw_mtx)) {
         GXLoadPosMtxImm(draw_mtx, GX_PNMTX0);
     } else {
 #endif
@@ -1790,6 +1772,11 @@ void dDlst_shadowControl_c::draw(Mtx param_0) {
 
 int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, cXyz* param_4,
                                        f32 param_5, f32 param_6, dKy_tevstr_c* param_7) {
+#if TARGET_PC
+    if (dusk::vr::isVrShadowRegistrationLocked()) {
+        return 0;
+    }
+#endif
     static Mtx mtx_adj = {
         {0.5f, 0.0f, 0.0f, 0.5f},
         {0.0f, -0.5f, 0.0f, 0.5f},
@@ -1901,6 +1888,11 @@ bool dDlst_shadowControl_c::addReal(u32 i_key, J3DModel* param_1) {
 
 int dDlst_shadowControl_c::setSimple(cXyz* param_0, f32 param_1, f32 param_2, cXyz* param_3,
                                      s16 param_4, f32 param_5, TGXTexObj* param_6) {
+#if TARGET_PC
+    if (dusk::vr::isVrShadowRegistrationLocked()) {
+        return 0;
+    }
+#endif
     if (param_3 == NULL || mSimpleNum >= 128) {
         return 0;
     }

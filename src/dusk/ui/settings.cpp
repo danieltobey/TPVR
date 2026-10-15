@@ -944,53 +944,83 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
         auto& leftPane = add_child<Pane>(content, Pane::Type::Controlled);
         auto& rightPane = add_child<Pane>(content, Pane::Type::Uncontrolled);
 
-        // Reorganised 2026-09-29: grouped by what the player is doing (view,
-        // moving, cutscenes, HUD, lighting, combat, performance); every
+        // Reorganised 2026-09-29, merged with upstream's 2026-10 settings on
+        // 2026-10-15 (spec 09): grouped by what the player is doing; every
         // description is at most two sentences and states the default.
+        // Settings that don't apply in the current view mode are greyed out.
+        const auto giantScreen = [] { return getSettings().game.vrScreenMode.getValue(); };
+        const auto immersiveFirstPerson = [] {
+            return !getSettings().game.vrScreenMode.getValue() &&
+                   !getSettings().game.vrThirdPerson.getValue();
+        };
+        const auto fullBodyOn = [immersiveFirstPerson] {
+            return immersiveFirstPerson() && getSettings().game.vrFullBody.getValue();
+        };
 
         leftPane.add_section("View");
-        // Perspective is one either/or choice over game.vrThirdPerson.
+        // View Mode is one either/or choice over game.vrThirdPerson and
+        // game.vrScreenMode (Giant Screen overrides the perspective, which is
+        // kept so leaving Giant Screen returns to it).
         leftPane.register_control(
             leftPane.add_select_button({
-                .key = "Perspective",
+                .key = "View Mode",
                 .getValue =
                     [] {
+                        if (getSettings().game.vrScreenMode.getValue()) {
+                            return "Giant Screen";
+                        }
                         return getSettings().game.vrThirdPerson.getValue() ? "Third Person"
                                                                            : "First Person";
                     },
                 .isModified =
                     [] {
-                        return getSettings().game.vrThirdPerson.getValue() !=
-                               getSettings().game.vrThirdPerson.getDefaultValue();
+                        return getSettings().game.vrScreenMode.getValue() ||
+                               getSettings().game.vrThirdPerson.getValue() !=
+                                   getSettings().game.vrThirdPerson.getDefaultValue();
                     },
             }),
             rightPane, [](Pane& pane) {
-                constexpr std::array kPerspectives = {"First Person", "Third Person"};
-                for (int i = 0; i < 2; i++) {
+                constexpr std::array kViewModes = {"First Person", "Third Person", "Giant Screen"};
+                for (int i = 0; i < 3; i++) {
                     pane.add_button({
-                            .text = kPerspectives[i],
+                            .text = kViewModes[i],
                             .isSelected =
-                                [i] { return getSettings().game.vrThirdPerson.getValue() == (i == 1); },
+                                [i] {
+                                    if (getSettings().game.vrScreenMode.getValue()) {
+                                        return i == 2;
+                                    }
+                                    return getSettings().game.vrThirdPerson.getValue() == (i == 1);
+                                },
                         })
                         .on_pressed([i] {
                             mDoAud_seStartMenu(kSoundItemChange);
-                            getSettings().game.vrThirdPerson.setValue(i == 1);
+                            if (i == 2) {
+                                getSettings().game.vrScreenMode.setValue(true);
+                            } else {
+                                getSettings().game.vrScreenMode.setValue(false);
+                                getSettings().game.vrThirdPerson.setValue(i == 1);
+                            }
                             config::save();
                         });
                 }
                 pane.add_rml(
-                    "<br/>Play in first or third person. Default: First Person."
-                    "<br/><br/><b>First Person:</b> a first-person camera, seeing through Link's "
-                    "eyes."
-                    "<br/><b>Third Person:</b> the game's original third-person camera behind "
-                    "Link.");
+                    "<br/>How you see the game. Default: First Person."
+                    "<br/><br/><b>First Person:</b> through Link's eyes."
+                    "<br/><b>Third Person:</b> the game's original camera behind Link, in 3D "
+                    "around you."
+                    "<br/><b>Giant Screen:</b> the normal flat game on a large screen about 5 m "
+                    "away that follows your head.");
             });
         config_bool_select(leftPane, rightPane, getSettings().game.vrThirdPersonFollowCameraYaw,
             {
                 .key = "Turn With Game Camera",
                 .helpText = "In third person, your view turns when the game's camera swings "
                             "left or right, such as following Link as he runs. On by default.",
-                .isDisabled = [] { return !getSettings().game.vrThirdPerson.getValue(); },
+                .isDisabled =
+                    [] {
+                        return getSettings().game.vrScreenMode.getValue() ||
+                               !getSettings().game.vrThirdPerson.getValue();
+                    },
             });
         // Shown inverted over game.vrStableCamera: on = the original camera
         // that follows Link's animations, off (default) = steady camera.
@@ -1006,7 +1036,7 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                         getSettings().game.vrStableCamera.setValue(!value);
                         config::save();
                     },
-                .isDisabled = [] { return getSettings().game.vrThirdPerson.getValue(); },
+                .isDisabled = [immersiveFirstPerson] { return !immersiveFirstPerson(); },
                 .isModified =
                     [] {
                         return getSettings().game.vrStableCamera.getValue() !=
@@ -1025,7 +1055,24 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                 .key = "Positional Tracking",
                 .helpText = "Lets you lean, duck and side-step to move your view without moving "
                             "Link, though leaning far can reveal the other side of thin walls. On "
-                            "by default."
+                            "by default.",
+                .isDisabled = giantScreen,
+            });
+        config_bool_select(leftPane, rightPane, getSettings().game.vrScreenModeStereo,
+            {
+                .key = "Giant Screen 3D",
+                .helpText = "Shows the giant screen in stereoscopic 3D, with the depth centred on "
+                            "Link, like a 3D cinema. Off by default.",
+                .isDisabled = [] { return !getSettings().game.vrScreenMode.getValue(); },
+            });
+        config_percent_select(leftPane, rightPane, getSettings().game.vrScreenModeDepth,
+            "Giant Screen 3D Depth",
+            "How much depth the 3D giant screen has: higher sends the scenery further back and "
+            "brings Link out toward you. Default: 100%.",
+            20, 200, 10,
+            [] {
+                return !getSettings().game.vrScreenMode.getValue() ||
+                       !getSettings().game.vrScreenModeStereo.getValue();
             });
         // "Attach Body Rotation to Headset" (game.vrAttachBodyRotationToHead) is
         // intentionally not exposed here -- still a real ConfigVar, editable
@@ -1038,13 +1085,36 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
         // shape_angle.y to the headset's yaw regardless. Disabled at the
         // ConfigVar default 2026-09-19 rather than left silently on. Do not
         // re-enable without new evidence the underlying bug is actually fixed.
-        config_bool_select(leftPane, rightPane, getSettings().game.vrShowBody,
+
+        leftPane.add_section("Body");
+        config_bool_select(leftPane, rightPane, getSettings().game.vrFullBody,
             {
-                .key = "Show Link's Body (Experimental)",
-                .helpText = "In first person, shows Link's body along with his stowed sword and "
-                            "shield (your hands and held items are always visible). Off by default.",
-                .isDisabled = [] { return getSettings().game.vrThirdPerson.getValue(); },
+                .key = "Full Body",
+                .helpText = "In first person, shows Link's body (everything but his head), with "
+                            "his arms reaching to your hands. On by default.",
+                .isDisabled = [immersiveFirstPerson] { return !immersiveFirstPerson(); },
             });
+        config_bool_select(leftPane, rightPane, getSettings().game.vrFullBodyHeadAnchor,
+            {
+                .key = "Body Follows Headset",
+                .helpText = "Keeps Link's neck under your head, so his body moves with the "
+                            "headset and turns to face where you look. On by default.",
+                .isDisabled = [fullBodyOn] { return !fullBodyOn(); },
+            });
+        config_bool_select(leftPane, rightPane, getSettings().game.vrFullBodyShowRolls,
+            {
+                .key = "Show Roll Animations",
+                .helpText = "Rolls and backflips play Link's own animation, letting go of your "
+                            "head and hands until the move ends. Off by default, which keeps his "
+                            "body still and with you.",
+                .isDisabled = [fullBodyOn] { return !fullBodyOn(); },
+            });
+        config_percent_select(leftPane, rightPane, getSettings().game.vrArmStretchMax,
+            "Arm Stretch Limit",
+            "How far Link's arms may lengthen to keep his hands on yours when you reach further "
+            "than he can; 100% turns stretching off. Default: 125%.",
+            100, 150, 5,
+            [fullBodyOn] { return !fullBodyOn(); });
 
         leftPane.add_section("Movement & Turning");
         config_bool_select(leftPane, rightPane, getSettings().game.vrMovementEnhancements,
@@ -1053,7 +1123,7 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                 .helpText = "In first person, Link speeds up and slows down smoothly, and turns "
                             "straight to the direction you push when you start moving. On by "
                             "default.",
-                .isDisabled = [] { return getSettings().game.vrThirdPerson.getValue(); },
+                .isDisabled = [immersiveFirstPerson] { return !immersiveFirstPerson(); },
             });
         config_bool_select(leftPane, rightPane, getSettings().game.vrSnapTurn,
             {
@@ -1078,11 +1148,12 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                 .helpText = "Turns your view smoothly along with Epona, so you keep looking the "
                             "same way relative to her. On by default."
             });
-        config_bool_select(leftPane, rightPane, getSettings().game.vrZTargetLockView,
+        config_bool_select(leftPane, rightPane, getSettings().game.vrZTargetCameraFocus,
             {
-                .key = "Z-Target Lock View",
-                .helpText = "Z-targeting snaps your view to face the target and keeps it in place "
-                            "as you strafe, while your head stays free to look around. On by default."
+                .key = "Face Z-Target",
+                .helpText = "Z-targeting turns your view to face the target and keeps it there as "
+                            "you or it move, while your head stays free to look around. On by "
+                            "default."
             });
 
         leftPane.add_section("Cutscenes");
@@ -1173,8 +1244,16 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             "HUD Size",
             "The size of the HUD and text boxes, measured diagonally. Default: 93 cm.",
             20, 400, 5, {}, {}, " cm");
+        config_bool_select(leftPane, rightPane, getSettings().game.vrHudOnLeftArm,
+            {
+                .key = "HUD on Left Wrist",
+                .helpText = "In first person, the HUD sits on the back of your left hand like a "
+                            "watch and appears when you look at it; text boxes stay in front of "
+                            "you. Off by default.",
+                .isDisabled = [immersiveFirstPerson] { return !immersiveFirstPerson(); },
+            });
 
-        leftPane.add_section("Lighting");
+        leftPane.add_section("Lighting & Shadows");
         leftPane.register_control(
             leftPane.add_select_button({
                 .key = "Lighting",
@@ -1215,6 +1294,13 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                     "<br/><b>Follow Look:</b> above and behind where you're looking, following "
                     "your head with a slight delay.");
             });
+        config_bool_select(leftPane, rightPane, getSettings().game.vrShadows,
+            {
+                .key = "Shadows (Experimental)",
+                .helpText = "Draws the shadows under Link, characters and objects, at some cost "
+                            "to frame rate. Needs Single-Pass Stereo; off by default.",
+                .isDisabled = [] { return !getSettings().game.vrSinglePassStereo.getValue(); },
+            });
 
         leftPane.add_section("Combat");
         config_bool_select(leftPane, rightPane, getSettings().game.vrSwapSwordShieldHands,
@@ -1230,19 +1316,36 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                             "swings triggering attack animations. On by default."
             });
 
-        leftPane.add_section("Performance");
-        config_bool_select(leftPane, rightPane, getSettings().game.vrSinglePassStereo,
-            {
-                .key = "Single-Pass Stereo",
-                .helpText = "Renders both eyes in a single pass, roughly halving the processor "
-                            "work per frame. On by default; turn it off if one eye looks wrong."
-            });
+        leftPane.add_section("Graphics");
         config_percent_select(leftPane, rightPane, getSettings().game.vrRenderScale,
             "VR Render Resolution",
             "Each eye's resolution as a percentage of the headset's recommended size, including "
             "supersampling above 100% (the Video tab's resolution doesn't affect VR). Applies "
             "after a restart; default: 100%.",
             50, 200, 5);
+#if VR_SETTINGS_STANDALONE
+        config_bool_select(leftPane, rightPane, getSettings().game.vrSuperResolution,
+            {
+                .key = "Sharpening",
+                .helpText = "The headset sharpens the picture as it shows it, making distant "
+                            "scenery and textures crisper. On by default."
+            });
+#endif
+        config_bool_select(leftPane, rightPane, getSettings().game.vrSinglePassStereo,
+            {
+                .key = "Single-Pass Stereo",
+                .helpText = "Renders both eyes in a single pass, roughly halving the processor "
+                            "work per frame. On by default; turn it off if one eye looks wrong."
+            });
+#if VR_SETTINGS_STANDALONE
+        config_bool_select(leftPane, rightPane, getSettings().game.vrHighClocks,
+            {
+                .key = "High Clocks",
+                .helpText = "Runs the headset's processor and graphics chip at a higher sustained "
+                            "speed, using more battery and heat. Applies after a restart; on by "
+                            "default."
+            });
+#endif
 
 #if !VR_SETTINGS_STANDALONE
         // Standalone (Quest) has no desktop window to mirror to, and renders

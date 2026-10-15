@@ -12,5 +12,8 @@ The sky dome (`d_a_vrbox`, `d_a_vrbox2`), cloud layer and sun sprite are placed 
 ## Settings
 None (always on in VR).
 
+## Notes
+Cloud shadows on the ground were hidden in VR (they were placed from the chase camera); upstream fixed and restored them on 2026-10-14 ("Restore cloud shadows", merged 2026-10-15). Not part of this spec's verification.
+
 ## Verification
 On a clear day, walk and turn: sun and clouds stay fixed in the sky and drift steadily. ✅

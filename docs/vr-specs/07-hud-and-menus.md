@@ -16,6 +16,7 @@
 |---|---|---|
 | HUD Distance | 50–300 cm | 90 cm |
 | HUD Size (diagonal) | 20–400 cm | 93 cm |
+| HUD on Left Wrist (upstream, 2026-10-13; first person) | On / Off | Off |
 
 ## Verification
 - Text boxes appear in front of nearby NPCs/walls with no strain. ✅
@@ -26,4 +27,6 @@
 - Start screen (screenshot 2026-09-29, after requirement 2): "✓ Disc ready" overlaps "QUIT", and the version text runs past the panel's right edge. Out of scope: this is an existing upstream issue, not caused by the canvas cap (confirmed by the tester, 2026-09-29).
 
 ## Notes
+HUD on Left Wrist is upstream's ("HUD on Left Arm", `game.vrHudOnLeftArm`): in first person the HUD lies on the back of the left hand at a fixed 20 cm width and shows while you look at it; text boxes and menus keep the floating billboard and this spec's distance/size. Renamed on the settings page only (spec 09).
+
 Requirement 2 changes `extern/aurora`; the PR needs an Aurora commit and a submodule bump.

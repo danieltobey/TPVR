@@ -28,6 +28,11 @@ void record_final_mtx(Mtx m);
 void forget_mtx(const void* key);
 
 bool lookup_replacement(const void* key, Mtx out);
+// Same, but ignores mark_live_this_frame(). For code that overwrites a
+// matrix every frame from its interpolated value: the live set is only
+// cleared when a sim tick starts recording, so lookup_replacement() refuses
+// keys that were marked live on an earlier frame.
+bool lookup_interpolated(const void* key, Mtx out);
 bool lookup_concat_replacement(const void* lhs, const void* rhs, Mtx out);
 
 // VR hand/item lag fix (2026-08-09, see vr-mod-notes section 20): VR's

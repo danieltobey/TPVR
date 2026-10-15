@@ -302,6 +302,14 @@ struct UserSettings {
         // set_present_source_mirror()) -- no extra render pass, no CPU
         // readback, near-zero cost.
         ConfigVar<bool> vrDesktopMirror;
+        // Renders flat-camera gameplay onto a large 16:9 screen in the headset.
+        // It can be toggled live; immersive VR behavior is disabled while selected.
+        ConfigVar<bool> vrScreenMode;
+        // Stereoscopic 3D on the Giant Screen: each eye gets an offset view
+        // with convergence on Link, giving the virtual screen depth (like a 3D cinema).
+        ConfigVar<bool> vrScreenModeStereo;
+        // Stereoscopic 3D depth multiplier for the Giant Screen (0.2x .. 3.0x, default 1.0x).
+        ConfigVar<float> vrScreenModeDepth;
         // Renders both VR eyes in ONE scene pass (instanced per eye into a
         // double-wide target, see vr_render::beginStereoPass()) instead of
         // traversing and recording the whole scene twice per frame. The
@@ -315,6 +323,22 @@ struct UserSettings {
         // Read once at VR startup (sizes the swapchain), so it takes effect
         // on the next launch.
         ConfigVar<float> vrRenderScale;
+        // Standalone Quest (XR_EXT_performance_settings): request SUSTAINED_HIGH
+        // CPU and GPU levels at VR startup instead of the runtime's default.
+        // Off leaves the runtime's choice (cooler, longer battery). Read once
+        // at VR startup, so it takes effect on the next launch.
+        ConfigVar<bool> vrHighClocks;
+        // Display refresh rate requested on standalone Quest
+        // (XR_FB_display_refresh_rate), in Hz. The headset gets the highest
+        // rate it supports at or below this value; 72 is the runtime default.
+        // Applied live. Ignored where the runtime doesn't advertise the
+        // extension.
+        ConfigVar<int> vrDisplayRefreshRate;
+        // Meta Quest Super Resolution / sharpening (XR_FB_composition_layer_settings,
+        // standalone only): chains XrCompositionLayerSettingsFB with the normal
+        // sharpening flag onto the projection layer. Applied live. Ignored where
+        // the runtime doesn't advertise the extension.
+        ConfigVar<bool> vrSuperResolution;
         // Application SpaceWarp (XR_FB_space_warp, standalone Quest only):
         // the app submits per-eye motion vectors + depth alongside the
         // color image and the runtime synthesizes every other frame,
@@ -348,6 +372,29 @@ struct UserSettings {
         // a player preference for players who don't want to see their own
         // avatar body in VR, not a bug workaround).
         ConfigVar<bool> vrShowBody;
+        // Draws the HUD (hearts, rupees, minimap, buttons) as a small panel
+        // floating just above the left hand/wrist instead of a panel in
+        // front of your face. Default off.
+        ConfigVar<bool> vrHudOnLeftArm;
+        // Object shadows (the projected "real" shadows under Link, NPCs and
+        // props, plus the simple blob shadows) in immersive VR. Only drawn
+        // with single-pass stereo. Default off.
+        ConfigVar<bool> vrShadows;
+        // Full body: shows Link's body in first person (face/hat/ears stay
+        // hidden) and poses his arms with IK so his hands follow the tracked
+        // controllers. Default on.
+        ConfigVar<bool> vrFullBody;
+        // With Full Body on: moves/turns the whole body every frame so its
+        // head sits at the camera and its torso faces where you look.
+        // Default on.
+        ConfigVar<bool> vrFullBodyHeadAnchor;
+        // Full Body: rolls/backflips/side rolls play the normal animation with
+        // the body, hands and held items detached from the headset and
+        // controllers for the move. Default off (body holds its pose instead).
+        ConfigVar<bool> vrFullBodyShowRolls;
+        // Full Body: how far Link's arms may lengthen (1.25 = 25%) when your
+        // hand reaches past his full arm length.
+        ConfigVar<float> vrArmStretchMax;
         // Forces the WHOLE game into third-person VR, the same way Wolf
         // form/cutscenes already render (camera anchored to the flatscreen
         // third-person eye instead of Link's head, headset position/
@@ -366,6 +413,12 @@ struct UserSettings {
         // the game camera while the headset still looks around freely on top.
         // Default on.
         ConfigVar<bool> vrThirdPersonFollowCameraYaw;
+        // Z-targeting turns the VR view to face the locked-on target, like the
+        // flatscreen camera does. First person: snaps to the target on lock-on,
+        // then follows the target's bearing as it (or Link) moves, so it stays
+        // where it was in view; the headset still looks around freely. Third
+        // person: the existing follow-the-Z-target-camera swing-in. Default on.
+        ConfigVar<bool> vrZTargetCameraFocus;
         // Attaches Link's body rotation to the headset's own yaw. Without
         // this, current.angle.y/shape_angle.y (daAlink_c::
         // setSpeedAndAngleNormal(), d_a_alink.cpp) only ease toward
@@ -583,9 +636,6 @@ struct UserSettings {
         // While riding Epona, rotate the view by the horse's own turning so
         // the look direction relative to the horse is kept (vr_main.cpp).
         ConfigVar<bool> vrHorseTurnView;
-        // Z-target lock-on: snap the view to face the target, then follow its
-        // bearing while the lock is held (vr_main.cpp). First person only.
-        ConfigVar<bool> vrZTargetLockView;
         // Within a cutscene shot, turn the view with the cutscene camera's own
         // pans (not just on cuts). Requires vrCutsceneFaceCamera.
         ConfigVar<bool> vrCutsceneFollowTurns;

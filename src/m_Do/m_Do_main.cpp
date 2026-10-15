@@ -417,9 +417,8 @@ void main01(void) {
             }
 
             const float step = timing.interpolating ? dusk::game_clock::sample_interpolation_step() : 1.0f;
-            // VR draws replayed models per eye/stereo pass; skip the
-            // flatscreen replay when it did last frame (see
-            // dusk::interp::material::set_defer_model_replay()).
+            // VR renders its own scene pass; skip the ordinary draw's replay
+            // when it is responsible for presentation this frame.
             dusk::interp::material::set_defer_model_replay(dusk::vr::isActive() &&
                                                            dusk::vr::isRenderingToHeadset());
             dusk::interp::begin_presentation(step);

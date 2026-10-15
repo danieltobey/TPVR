@@ -465,6 +465,12 @@ public:
                                       param_6);
     }
 
+#if TARGET_PC
+    // VR: drop this frame's shadow registrations so they can be rebuilt
+    // once from the frame's own view (see dusk::vr's shadow step).
+    void resetShadow() { mShadowControl.reset(); }
+#endif
+
     bool addRealShadow(u32 key, J3DModel* model) {
         return mShadowControl.addReal(key, model);
     }

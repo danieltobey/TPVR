@@ -41,7 +41,17 @@
 
 #pragma once
 
+// DUSK_VR_PLATFORM_ANDROID: Android/Quest-only pieces (JNI loader init,
+// XR_KHR_android_create_instance, thread hints, AHardwareBuffer).
+// DUSK_VR_XR_GRAPHICS_VULKAN: the Vulkan XR path, shared by Android and
+// native Linux (Monado / SteamVR / WiVRn / ALVR).
 #if defined(TARGET_ANDROID) || defined(__ANDROID__) || defined(ANDROID)
+#define DUSK_VR_PLATFORM_ANDROID 1
+#else
+#define DUSK_VR_PLATFORM_ANDROID 0
+#endif
+
+#if DUSK_VR_PLATFORM_ANDROID || defined(__linux__)
 #define DUSK_VR_XR_GRAPHICS_VULKAN 1
 #else
 #define DUSK_VR_XR_GRAPHICS_VULKAN 0
@@ -63,12 +73,16 @@
 // pulled in by vulkan.h/vulkan_core.h when this platform macro is defined
 // -- must come before vulkan.h is first included, same ordering
 // requirement as XR_USE_PLATFORM_ANDROID below).
+#if DUSK_VR_PLATFORM_ANDROID
 #ifndef VK_USE_PLATFORM_ANDROID_KHR
 #define VK_USE_PLATFORM_ANDROID_KHR
 #endif
+#endif
 #include <vulkan/vulkan.h>
+#if DUSK_VR_PLATFORM_ANDROID
 #include <jni.h>
 #include <SDL3/SDL_system.h>
+#endif
 
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>  // XrGraphicsRequirementsVulkanKHR, XrGraphicsBindingVulkanKHR
@@ -111,8 +125,22 @@ struct Bootstrap {
     // the recommended motion-vector image size) and Session's space-warp
     // path (vr_xr_submit.hpp). Never true on the D3D12/PC branch.
     bool hasSpaceWarp = false;
+    // XR_FB_display_refresh_rate (Meta standalone): enabled only if
+    // advertised. Lets vr_main.cpp request game.vrDisplayRefreshRate
+    // instead of the runtime's 72Hz default. Never true on the D3D12/PC
+    // branch.
+    bool hasDisplayRefreshRate = false;
+    // XR_FB_composition_layer_settings (Meta standalone, "Super Resolution"
+    // sharpening): enabled only if advertised. vr_main.cpp chains
+    // XrCompositionLayerSettingsFB onto the projection layer when
+    // game.vrSuperResolution is on. Never true on the D3D12/PC branch.
+    bool hasLayerSettings = false;
+    PFN_xrEnumerateDisplayRefreshRatesFB xrEnumerateDisplayRefreshRatesFB_ = nullptr;
+    PFN_xrRequestDisplayRefreshRateFB xrRequestDisplayRefreshRateFB_ = nullptr;
     PFN_xrPerfSettingsSetPerformanceLevelEXT xrPerfSettingsSetPerformanceLevelEXT_ = nullptr;
+#if DUSK_VR_PLATFORM_ANDROID
     PFN_xrSetAndroidApplicationThreadKHR xrSetAndroidApplicationThreadKHR_ = nullptr;
+#endif
 };
 
 // True if the loader/runtime advertises the named instance extension.
@@ -189,6 +217,7 @@ inline void checkResult(XrResult result, const char* what) {
 // branch doesn't need. It's resolved via xrGetInstanceProcAddr(XR_NULL_HANDLE,
 // ...) since, by definition, no XrInstance exists yet to resolve it against.
 inline Bootstrap initialize() {
+#if DUSK_VR_PLATFORM_ANDROID
     JNIEnv* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
     if (env == nullptr) {
         throw std::runtime_error("SDL_GetAndroidJNIEnv() returned null");
@@ -213,12 +242,15 @@ inline Bootstrap initialize() {
         xrInitializeLoaderKHR_(
             reinterpret_cast<const XrLoaderInitInfoBaseHeaderKHR*>(&loaderInitInfo)),
         "xrInitializeLoaderKHR");
+#endif  // DUSK_VR_PLATFORM_ANDROID (desktop loaders find the runtime themselves)
 
     Bootstrap boot;
 
     std::vector<const char*> enabledExtensions = {
         XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME,
+#if DUSK_VR_PLATFORM_ANDROID
         XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME,
+#endif
     };
     // Optional perf extensions -- only requested when advertised (see the
     // Bootstrap field comments). The loader is already initialized above,
@@ -228,22 +260,37 @@ inline Bootstrap initialize() {
     if (boot.hasPerformanceSettings) {
         enabledExtensions.push_back(XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME);
     }
+#if DUSK_VR_PLATFORM_ANDROID
     boot.hasAndroidThreadSettings =
         instanceExtensionAvailable(XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME);
     if (boot.hasAndroidThreadSettings) {
         enabledExtensions.push_back(XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME);
     }
+#endif
     boot.hasSpaceWarp = instanceExtensionAvailable(XR_FB_SPACE_WARP_EXTENSION_NAME);
     if (boot.hasSpaceWarp) {
         enabledExtensions.push_back(XR_FB_SPACE_WARP_EXTENSION_NAME);
     }
+#if DUSK_VR_PLATFORM_ANDROID
+    // Standalone only: on PC the runtime / streamer owns the refresh rate,
+    // and requesting the 72Hz default there would lower it.
+    boot.hasDisplayRefreshRate = instanceExtensionAvailable(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+    if (boot.hasDisplayRefreshRate) {
+        enabledExtensions.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+    }
+    boot.hasLayerSettings = instanceExtensionAvailable(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
+    if (boot.hasLayerSettings) {
+        enabledExtensions.push_back(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
+    }
+#endif
 
+    XrInstanceCreateInfo instanceInfo{XR_TYPE_INSTANCE_CREATE_INFO};
+#if DUSK_VR_PLATFORM_ANDROID
     XrInstanceCreateInfoAndroidKHR androidInfo{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
     androidInfo.applicationVM = vm;
     androidInfo.applicationActivity = activity;
-
-    XrInstanceCreateInfo instanceInfo{XR_TYPE_INSTANCE_CREATE_INFO};
     instanceInfo.next = &androidInfo;
+#endif
     instanceInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
     instanceInfo.enabledExtensionNames = enabledExtensions.data();
     std::strncpy(instanceInfo.applicationInfo.applicationName, "Dusklight VR",
@@ -292,12 +339,25 @@ inline Bootstrap initialize() {
         boot.hasPerformanceSettings = false;
         boot.xrPerfSettingsSetPerformanceLevelEXT_ = nullptr;
     }
+#if DUSK_VR_PLATFORM_ANDROID
     if (boot.hasAndroidThreadSettings &&
         XR_FAILED(xrGetInstanceProcAddr(
             boot.instance, "xrSetAndroidApplicationThreadKHR",
             reinterpret_cast<PFN_xrVoidFunction*>(&boot.xrSetAndroidApplicationThreadKHR_)))) {
         boot.hasAndroidThreadSettings = false;
         boot.xrSetAndroidApplicationThreadKHR_ = nullptr;
+    }
+#endif
+    if (boot.hasDisplayRefreshRate &&
+        (XR_FAILED(xrGetInstanceProcAddr(
+             boot.instance, "xrEnumerateDisplayRefreshRatesFB",
+             reinterpret_cast<PFN_xrVoidFunction*>(&boot.xrEnumerateDisplayRefreshRatesFB_))) ||
+         XR_FAILED(xrGetInstanceProcAddr(
+             boot.instance, "xrRequestDisplayRefreshRateFB",
+             reinterpret_cast<PFN_xrVoidFunction*>(&boot.xrRequestDisplayRefreshRateFB_))))) {
+        boot.hasDisplayRefreshRate = false;
+        boot.xrEnumerateDisplayRefreshRatesFB_ = nullptr;
+        boot.xrRequestDisplayRefreshRateFB_ = nullptr;
     }
 
     checkResult(
@@ -414,6 +474,12 @@ struct XrGraphicsDevice {
     // (vr_xr_submit.hpp's finishSharedImageGpuCopy()). Same "detect, don't
     // assume" pattern as supportsExternalMemoryFd above.
     bool supportsExternalSemaphoreFd = false;
+    // VkPhysicalDeviceProperties IDs of the GPU the runtime picked. On
+    // desktop Linux the runtime and Dawn can land on different GPUs
+    // (iGPU + dGPU); opaque-fd sharing only works within one GPU, so
+    // vr_main.cpp's startup() compares these against Dawn's adapter.
+    uint32_t vendorID = 0;
+    uint32_t deviceID = 0;
 };
 
 // Creates a VkInstance + VkDevice via XR_KHR_vulkan_enable2's
@@ -435,7 +501,24 @@ inline XrGraphicsDevice createXrGraphicsDevice(const Bootstrap& boot) {
     // the NDK's Vulkan headers define -- same pattern as the D3D12 path
     // using boot.d3d12Requirements.minFeatureLevel instead of a hardcoded
     // feature level.
-    appInfo.apiVersion = boot.vulkanRequirements.minApiVersionSupported;
+    //
+    // The requirements are XrVersions (major<<48 | minor<<32 | patch), NOT
+    // VK_MAKE_API_VERSION values -- assigning one directly truncates to 0,
+    // i.e. Vulkan 1.0, which leaves 1.1 entry points such as
+    // vkGetImageMemoryRequirements2 unloaded (null-call crash on RADV with
+    // WiVRn, 2026-10-03). Convert, and ask for at least 1.1 (the shared-image
+    // path needs it) unless the runtime caps lower.
+    {
+        const XrVersion xrMin = boot.vulkanRequirements.minApiVersionSupported;
+        const XrVersion xrMax = boot.vulkanRequirements.maxApiVersionSupported;
+        uint32_t minVk = VK_MAKE_API_VERSION(0, XR_VERSION_MAJOR(xrMin), XR_VERSION_MINOR(xrMin), 0);
+        uint32_t maxVk = VK_MAKE_API_VERSION(0, XR_VERSION_MAJOR(xrMax), XR_VERSION_MINOR(xrMax), 0);
+        uint32_t want = minVk < VK_API_VERSION_1_1 ? VK_API_VERSION_1_1 : minVk;
+        if (xrMax != 0 && want > maxVk) {
+            want = maxVk;
+        }
+        appInfo.apiVersion = want;
+    }
 
     VkInstanceCreateInfo vkInstanceInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     vkInstanceInfo.pApplicationInfo = &appInfo;
@@ -535,11 +618,13 @@ inline XrGraphicsDevice createXrGraphicsDevice(const Bootstrap& boot) {
             enabledDeviceExtensions.push_back(name);
         }
     }
+#if DUSK_VR_PLATFORM_ANDROID
     if (hasDeviceExtension(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME)) {
         enabledDeviceExtensions.push_back(
             VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME);
         gfx.supportsAndroidHardwareBuffer = true;
     }
+#endif
     // Opaque-fd memory export (2026-09-19, the shared-image GPU-direct path
     // -- see XrGraphicsDevice::supportsExternalMemoryFd). Its base
     // VK_KHR_external_memory is already in kAhbDependencies above.
@@ -587,6 +672,10 @@ inline XrGraphicsDevice createXrGraphicsDevice(const Bootstrap& boot) {
 
     gfx.queueIndex = 0;
     vkGetDeviceQueue(gfx.device, gfx.queueFamilyIndex, gfx.queueIndex, &gfx.commandQueue);
+    VkPhysicalDeviceProperties physProps{};
+    vkGetPhysicalDeviceProperties(gfx.physicalDevice, &physProps);
+    gfx.vendorID = physProps.vendorID;
+    gfx.deviceID = physProps.deviceID;
     return gfx;
 }
 
@@ -763,6 +852,9 @@ struct HandActions {
     // click -> pause, left click -> D-pad right (added same day, see
     // vr_main.cpp's tick()).
     XrAction stickClickAction = XR_NULL_HANDLE;     // BOOL: thumbstick click, both hands
+    // Touch controller vibration, both hands; driven from the game's rumble
+    // motor state (JUTGamePad::CRumble::mStatus) in vr_main.cpp's tick().
+    XrAction hapticAction = XR_NULL_HANDLE;         // VIBRATION_OUTPUT, both hands
 
     XrPath leftHandPath = XR_NULL_PATH;
     XrPath rightHandPath = XR_NULL_PATH;
@@ -835,6 +927,7 @@ inline HandActions createHandActionSet(XrInstance instance) {
     createAction(XR_ACTION_TYPE_BOOLEAN_INPUT, "secondary_click", "Secondary Button", &actions.secondaryClickAction);
     createAction(XR_ACTION_TYPE_BOOLEAN_INPUT, "menu_click", "Menu", &actions.menuClickAction);
     createAction(XR_ACTION_TYPE_BOOLEAN_INPUT, "stick_click", "Stick Click", &actions.stickClickAction);
+    createAction(XR_ACTION_TYPE_VIBRATION_OUTPUT, "haptic", "Rumble", &actions.hapticAction);
 
     XrPath leftBindingPath = XR_NULL_PATH;
     XrPath rightBindingPath = XR_NULL_PATH;
@@ -868,7 +961,8 @@ inline HandActions createHandActionSet(XrInstance instance) {
     // session, still needed for hand-tracking visuals on all of them.
     suggestForProfile("/interaction_profiles/khr/simple_controller", bindings, 4);
     suggestForProfile("/interaction_profiles/htc/vive_controller", bindings, 4);
-    suggestForProfile("/interaction_profiles/valve/index_controller", bindings, 4);
+    // valve/index_controller gets full gameplay bindings below, after the
+    // Touch paths are resolved.
 
     // Gameplay button/axis bindings, scoped to oculus/touch_controller only
     // (Quest 3's native profile, and what SteamVR/Virtual Desktop/Meta Link
@@ -903,6 +997,9 @@ inline HandActions createHandActionSet(XrInstance instance) {
     xrStringToPath(instance, "/user/hand/left/input/menu/click", &leftMenuClickPath);
     xrStringToPath(instance, "/user/hand/right/input/thumbstick/click", &rightStickClickPath);
     xrStringToPath(instance, "/user/hand/left/input/thumbstick/click", &leftStickClickPath);
+    XrPath leftHapticPath = XR_NULL_PATH, rightHapticPath = XR_NULL_PATH;
+    xrStringToPath(instance, "/user/hand/left/output/haptic", &leftHapticPath);
+    xrStringToPath(instance, "/user/hand/right/output/haptic", &rightHapticPath);
 
     XrActionSuggestedBinding touchBindings[] = {
         {actions.gripPoseAction, leftBindingPath},
@@ -922,8 +1019,43 @@ inline HandActions createHandActionSet(XrInstance instance) {
         {actions.menuClickAction, leftMenuClickPath},
         {actions.stickClickAction, rightStickClickPath},
         {actions.stickClickAction, leftStickClickPath},
+        {actions.hapticAction, leftHapticPath},
+        {actions.hapticAction, rightHapticPath},
     };
-    suggestForProfile("/interaction_profiles/oculus/touch_controller", touchBindings, 17);
+    suggestForProfile("/interaction_profiles/oculus/touch_controller", touchBindings,
+                      static_cast<uint32_t>(std::size(touchBindings)));
+
+    // Valve Index: same layout as Touch. Index has A/B on BOTH hands, so the
+    // left A/B stand in for Touch's X/Y (D-pad left/up). Index has no menu
+    // button (system is reserved by the runtime), so pause and the
+    // Dusklight-menu chord use right stick click, which Touch already
+    // supports too. Trigger, squeeze, thumbsticks, stick clicks and haptics
+    // use the same input paths as Touch.
+    XrPath leftAClickPath = XR_NULL_PATH, leftBClickPath = XR_NULL_PATH;
+    xrStringToPath(instance, "/user/hand/left/input/a/click", &leftAClickPath);
+    xrStringToPath(instance, "/user/hand/left/input/b/click", &leftBClickPath);
+    XrActionSuggestedBinding indexBindings[] = {
+        {actions.gripPoseAction, leftBindingPath},
+        {actions.gripPoseAction, rightBindingPath},
+        {actions.aimPoseAction, leftAimBindingPath},
+        {actions.aimPoseAction, rightAimBindingPath},
+        {actions.triggerValueAction, leftTriggerPath},
+        {actions.triggerValueAction, rightTriggerPath},
+        {actions.squeezeValueAction, leftSqueezePath},
+        {actions.squeezeValueAction, rightSqueezePath},
+        {actions.thumbstickAction, leftStickPath},
+        {actions.thumbstickAction, rightStickPath},
+        {actions.primaryClickAction, leftAClickPath},
+        {actions.primaryClickAction, rightAClickPath},
+        {actions.secondaryClickAction, leftBClickPath},
+        {actions.secondaryClickAction, rightBClickPath},
+        {actions.stickClickAction, rightStickClickPath},
+        {actions.stickClickAction, leftStickClickPath},
+        {actions.hapticAction, leftHapticPath},
+        {actions.hapticAction, rightHapticPath},
+    };
+    suggestForProfile("/interaction_profiles/valve/index_controller", indexBindings,
+                      static_cast<uint32_t>(std::size(indexBindings)));
 
     return actions;
 }

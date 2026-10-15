@@ -19,6 +19,9 @@
 | Setting | Values | Default |
 |---|---|---|
 | Lighting | Original / Sun/Moon / Follow Look | Sun/Moon |
+| Shadows (Experimental) (upstream, 2026-10-14; needs Single-Pass Stereo) | On / Off | Off |
+
+Shadows is upstream's object-shadow fix (shadow maps rendered before the eye pass, registered once per frame). It sits in this page section (spec 09) but isn't part of this spec's verification; its frame-rate cost is measured in spec 13.
 
 ## Verification
 - Per-pass logging: object light setups in eye passes go from 0 to all of them. ✅

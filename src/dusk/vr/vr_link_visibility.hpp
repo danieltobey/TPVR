@@ -18,17 +18,22 @@
 #include "d/actor/d_a_boomerang.h"
 #include "d/actor/d_a_mg_rod.h"
 #include "d/actor/d_a_midna.h"  // Wolf-mode Midna head/mask hiding
+#include "d/actor/d_a_nbomb.h"
+#include "d/actor/d_a_obj_carry.h"
+#include "d/actor/d_a_obj_stone.h"
 #include "d/d_com_inf_game.h"
 #include "m_Do/m_Do_ext.h"  // mDoExt_McaMorf::getModel(), for the fishing rod's live-refresh
 #include "dusk/interp/frame_interpolation.h"
 #include "f_op/f_op_view.h"
 #include "JSystem/J3DGraphAnimator/J3DModel.h"
 #include "JSystem/J3DGraphAnimator/J3DModelData.h"
+#include "JSystem/J3DGraphAnimator/J3DJoint.h"
 #include "JSystem/J3DGraphAnimator/J3DShapeTable.h"
 
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 
 #include "dusk/vr/vr_debug_log.hpp"  // dusk::vr::duskVrLog
 
@@ -732,6 +737,40 @@ inline void hideArmsAndEars(daAlink_c* link) {
     }
 }
 
+// Full body (game.vrFullBody): arms (plus the gauntlet) stay visible for the
+// IK'd arms, only the ears/earring are hidden. Same indices as above, split.
+inline constexpr int kArmMaterialIndices[] = {0, 1, 2, 10};
+inline constexpr int kEarMaterialIndices[] = {7, 8};
+inline constexpr int kArmMaterialIndicesCasual[] = {6};
+inline constexpr int kEarMaterialIndicesCasual[] = {1, 2};
+
+inline void hideEarsShowArms(daAlink_c* link) {
+    if (!link || !link->mpLinkModel || link->checkWolf()) return;
+    J3DModelData* modelData = link->mpLinkModel->getModelData();
+    if (!modelData) return;
+    const u16 matNum = modelData->getMaterialNum();
+    const bool casual = link->checkCasualWearFlg();
+    auto setShown = [&](const int* begin, const int* end, bool shown) {
+        for (const int* it = begin; it != end; ++it) {
+            if (static_cast<u16>(*it) >= matNum) continue;
+            J3DShape* shape = modelData->getMaterialNodePointer(*it)->getShape();
+            if (!shape) continue;
+            if (shown) {
+                shape->show();
+            } else {
+                shape->hide();
+            }
+        }
+    };
+    if (casual) {
+        setShown(std::begin(kEarMaterialIndicesCasual), std::end(kEarMaterialIndicesCasual), false);
+        setShown(std::begin(kArmMaterialIndicesCasual), std::end(kArmMaterialIndicesCasual), true);
+    } else {
+        setShown(std::begin(kEarMaterialIndices), std::end(kEarMaterialIndices), false);
+        setShown(std::begin(kArmMaterialIndices), std::end(kArmMaterialIndices), true);
+    }
+}
+
 // Mirror of hideArmsAndEars() above, for the third-person fallback case
 // (see updateFrame()'s firstPerson branch below) -- same per-frame
 // re-application reasoning (the base game's own outfit-branch logic can
@@ -795,6 +834,15 @@ inline Mtx s_rightHandMtx;
 inline Mtx s_leftHandMtx;
 inline bool s_handMtxValid = false;
 
+// Game-world unit normal pointing OUT of the back of the left hand (used by
+// "HUD on Left Arm"). Taken straight from the left OpenXR grip pose, not the
+// hand-mesh calibration: per the OpenXR spec, the grip pose's +X axis is the
+// palm normal pointing AWAY from the palm on the left hand. If testing shows
+// the panel appears on the palm instead, flip kLeftBackOfHandSign.
+// Flipped to -1 on 2026-10-13: in-headset, +X put the panel on the palm.
+inline constexpr float kLeftBackOfHandSign = -1.0f;
+inline Vec3f s_leftBackOfHand{0.f, 1.f, 0.f};
+
 // Sword/shield RESTING-POSE (not-hand-attached) smoothing state: the
 // belt/back-relative pose setItemMatrix() computes is only written once per
 // SIM TICK. Marking that matrix "live" (to bypass frame_interp's stale
@@ -819,6 +867,10 @@ inline bool s_shieldRestingValid = false;
 inline Mtx s_kanteraRestingPrevMtx;
 inline Mtx s_kanteraRestingCurrMtx;
 inline uint64_t s_kanteraRestingTick = ~0ull;
+inline Mtx s_heldItemRestingPrevMtx;
+inline Mtx s_heldItemRestingCurrMtx;
+inline bool s_heldItemRestingValid = false;
+inline uint64_t s_heldItemRestingTick = ~0ull;
 inline bool s_kanteraRestingValid = false;
 }  // namespace detail
 
@@ -905,6 +957,7 @@ inline bool isRealCutsceneRunning();
 inline bool isFirstPerson(daAlink_c* link) {
     if (!link || link->checkWolf()) return false;
 
+    if (dusk::getSettings().game.vrScreenMode.getValue()) return false;
     // "Third Person" VR setting (added 2026-08-18, explicit user request:
     // "add a third person option that shows link's body and puts the
     // entire game in third person"). Forcing this single choke point to
@@ -1030,6 +1083,7 @@ inline bool isFirstPerson(daAlink_c* link) {
 // third person," wolf included, not "except when riding as a wolf."
 inline bool isWolfFirstPersonView(daAlink_c* link) {
     if (!link || !link->checkWolf()) return false;
+    if (dusk::getSettings().game.vrScreenMode.getValue()) return false;
     if (dusk::getSettings().game.vrThirdPerson.getValue()) return false;
     if (link->checkEventRun()) return false;
     return true;
@@ -1475,7 +1529,20 @@ inline void computeTrackedHandMatrices(const XrVector3f& hmdPos,
                                         float yawRad) {
     buildHandMtx(detail::s_rightHandMtx, hmdPos, rightControllerPose, eyeAnchor, VR_SCALE_FACTOR, false, yawRad);
     buildHandMtx(detail::s_leftHandMtx, hmdPos, leftControllerPose, eyeAnchor, VR_SCALE_FACTOR, true, yawRad);
+    // Same yaw-adjusted orientation buildHandMtx() uses; tracking-space
+    // vectors map to game-world vectors with no axis flip (see its comment).
+    const XrQuaternionf q = dusk::vr::rotateYawQuat(leftControllerPose.orientation, yawRad);
+    detail::s_leftBackOfHand = rotateVecByQuat(q.x, q.y, q.z, q.w,
+                                               Vec3f{detail::kLeftBackOfHandSign, 0.f, 0.f});
     detail::s_handMtxValid = true;
+}
+
+inline bool getLeftBackOfHandWorldNormal(float& outX, float& outY, float& outZ) {
+    if (!detail::s_handMtxValid) return false;
+    outX = detail::s_leftBackOfHand.x;
+    outY = detail::s_leftBackOfHand.y;
+    outZ = detail::s_leftBackOfHand.z;
+    return true;
 }
 
 inline void updateFrame(const FrameInput& input) {
@@ -1553,7 +1620,11 @@ inline void updateFrame(const FrameInput& input) {
             // models.
             hideModel(link->mpLinkFaceModel);
             hideModel(link->mpLinkHatModel);
-            hideArmsAndEars(link);
+            if (dusk::getSettings().game.vrFullBody.getValue()) {
+                hideEarsShowArms(link);
+            } else {
+                hideArmsAndEars(link);
+            }
         } else {
             showModel(link->mpLinkFaceModel);
             showModel(link->mpLinkHatModel);
@@ -1694,6 +1765,33 @@ inline void applyTrackedHandMtx(J3DModel* handModel) {
 // stop overriding the hand pose the same way it already does for Wolf
 // form/cutscenes. Checked BEFORE dereferencing link for the swim/crawl
 // checks below, not after -- a null link should never reach those either.
+// Moves whose animation spins the whole body (rolls, backflip, cartwheel).
+// With the head anchored to the camera the body would orbit around you, so
+// the body holds its pose from just before the move instead.
+inline bool isFullBodyTumbleProc(daAlink_c* link) {
+    switch (link->mProcID) {
+    case daAlink_c::PROC_FRONT_ROLL:
+    case daAlink_c::PROC_FRONT_ROLL_CRASH:
+    case daAlink_c::PROC_FRONT_ROLL_SUCCESS:
+    case daAlink_c::PROC_SIDE_ROLL:
+    case daAlink_c::PROC_BACK_JUMP:
+    case daAlink_c::PROC_ROLL_JUMP:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// "Show Roll Animations" (game.vrFullBodyShowRolls): during a tumbling move
+// the body, hands and anything held play the game's own animation instead of
+// following the headset/controllers. Every per-frame override then feeds the
+// normal interpolated pose instead of skipping: mark_live_this_frame() lasts
+// until the next sim tick, so skipping would freeze the last tracked pose.
+inline bool isHandTrackingSuspended(daAlink_c* link) {
+    return link && dusk::getSettings().game.vrFullBody.getValue() &&
+           dusk::getSettings().game.vrFullBodyShowRolls.getValue() && isFullBodyTumbleProc(link);
+}
+
 inline void refreshTrackedHandDrawMtxLive(J3DModel* handModel) {
     if (!handModel || !detail::s_handMtxValid) return;
 
@@ -1701,7 +1799,20 @@ inline void refreshTrackedHandDrawMtxLive(J3DModel* handModel) {
     if (!link || !isFirstPerson(link)) return;
     if (link->checkModeFlg(daAlink_c::MODE_SWIMMING) || isCrawling(link)) return;
 
-    applyTrackedHandMtx(handModel);
+    if (isHandTrackingSuspended(link)) {
+        // Hands follow the body's animated hand joints (al_handsL/R mirror
+        // body joints 9/0xE, same as setDrawHand()).
+        J3DModel* body = link->mpLinkModel;
+        Mtx m;
+        if (body && dusk::interp::lookup_interpolated(body->getAnmMtx(9), m)) {
+            handModel->setAnmMtx(LEFT_HAND_JOINT, m);
+        }
+        if (body && dusk::interp::lookup_interpolated(body->getAnmMtx(0xE), m)) {
+            handModel->setAnmMtx(RIGHT_HAND_JOINT, m);
+        }
+    } else {
+        applyTrackedHandMtx(handModel);
+    }
 
     dusk::interp::mark_live_this_frame(handModel->getAnmMtx(RIGHT_HAND_JOINT));
     dusk::interp::mark_live_this_frame(handModel->getAnmMtx(LEFT_HAND_JOINT));
@@ -2135,6 +2246,519 @@ inline void markModelJointsLive(J3DModel* model) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Full body IK (game.vrFullBody, default on, added 2026-10-14)
+//
+// Shows Link's body in first person (face/hat/ears stay hidden) and poses
+// his arms so the body's hand joints sit exactly on the tracked hands.
+//
+// Runs once per real frame from tick(), after the tracked hand matrices are
+// computed and before the sword/shield/held-item refreshes (those read the
+// body's item joints, which move rigidly with the hand here, so their
+// hand-to-item offsets are unchanged).
+//
+// Why it is done this way:
+//  - The body's joint buffer only holds the last SIM-TICK pose; the draw
+//    normally substitutes an interpolated pose per joint. Overwriting a
+//    joint therefore needs mark_live_this_frame(), and marking joints live
+//    over the raw tick pose breaks the animation smoothing -- that is what
+//    made an earlier whole-body attempt stutter at 30Hz. So the
+//    interpolated pose of EVERY joint is copied into the buffer first, the
+//    arms are solved on top of it, and the whole body is marked live. The
+//    recorded interpolation history isn't touched: record_final_mtx()
+//    copies values during calc().
+//  - The body mesh is GPU-skinned from the envelope matrices, which calc()
+//    derives from the joint matrices, so they're rebuilt after solving
+//    (calcWeightEnvelopeMtx()).
+//  - Each solved joint is moved with a rigid delta applied to its whole
+//    subtree, so children (fingers, the item joints the sword/shield hang
+//    off) stay attached.
+//
+// Arm solve: two-bone IK. The shoulder joint swings so the elbow lands on
+// the circle that reaches the target, picked with a pole pointing down,
+// outward and slightly back. The forearm takes its twist from the tracked
+// hand (the animation's forearm-to-hand rotation is kept and the result is
+// swung onto the required bone direction), which avoids a twisted wrist.
+// Out of reach: the arm straightens toward the target and the hand joint
+// still snaps to the tracked hand, stretching the wrist skin slightly.
+// ---------------------------------------------------------------------------
+
+namespace detail {
+inline const J3DModelData* s_ikModelData = nullptr;
+// Last complete interpolated body pose (see refreshFullBodyIkLive()). Reused
+// when no fresh one is available (hit lag stops game time, which clears the
+// interpolation history) and while a tumbling move is frozen out.
+inline Mtx s_ikInterp[256];
+inline Mtx s_ikScratch[256];
+inline bool s_ikPoseValid = false;
+// While a tumble is frozen out: the body's real interpolated pose this
+// frame, so body-mounted models (stowed sword/shield, sheath, lantern) can be
+// carried from the real pose onto the frozen one by their nearest joint.
+inline Mtx s_ikActual[256];
+inline bool s_ikFreezeActive = false;
+inline u16 s_ikJointNum = 0;
+// Rigid transform applied to the whole body this frame by the head anchor
+// (identity when unused). Models drawn separately but sitting on the body
+// (stowed sword/shield, sheath, lantern) get it too.
+inline Mtx s_bodyAnchorDelta;
+inline bool s_bodyAnchorValid = false;
+inline Mtx s_sheathRestingPrevMtx;
+inline Mtx s_sheathRestingCurrMtx;
+inline bool s_sheathRestingValid = false;
+inline uint64_t s_sheathRestingTick = ~0ull;
+inline int s_ikParent[256];
+
+inline void ikBuildParents(J3DJoint* joint, int parent) {
+    for (; joint != nullptr; joint = joint->getYounger()) {
+        const int no = joint->getJntNo();
+        if (no < 256) {
+            s_ikParent[no] = parent;
+        }
+        ikBuildParents(joint->getChild(), no);
+    }
+}
+
+inline cXyz ikPos(const Mtx m) {
+    return cXyz(m[0][3], m[1][3], m[2][3]);
+}
+
+inline bool ikIsInSubtree(int joint, int root) {
+    for (int j = joint; j >= 0; j = s_ikParent[j]) {
+        if (j == root) return true;
+    }
+    return false;
+}
+
+// anm[j] = delta * anm[j] for root and every joint under it.
+inline void ikApplyToSubtree(J3DModel* model, int root, const Mtx delta) {
+    const u16 jointNum = model->getModelData()->getJointNum();
+    for (u16 j = 0; j < jointNum && j < 256; ++j) {
+        if (!ikIsInSubtree(j, root)) continue;
+        Mtx out;
+        MTXConcat(delta, model->getAnmMtx(j), out);
+        MTXCopy(out, model->getAnmMtx(j));
+    }
+}
+
+// Rotation (3x3 in m, translation zero) taking direction a onto b.
+inline void ikRotFromTo(const cXyz& aIn, const cXyz& bIn, Mtx m) {
+    MTXIdentity(m);
+    cXyz a = aIn;
+    cXyz b = bIn;
+    const f32 la = a.abs();
+    const f32 lb = b.abs();
+    if (la < 1e-4f || lb < 1e-4f) return;
+    a /= la;
+    b /= lb;
+    cXyz axis = a.outprod(b);
+    const f32 s = axis.abs();
+    const f32 c = a.inprod(b);
+    if (s < 1e-6f) {
+        if (c > 0.f) return;
+        // 180 degrees: any axis perpendicular to a.
+        axis = std::fabs(a.x) < 0.9f ? cXyz(1.f, 0.f, 0.f).outprod(a) : cXyz(0.f, 1.f, 0.f).outprod(a);
+        axis /= axis.abs();
+        MTXRotAxisRad(m, &axis, 3.14159265f);
+        return;
+    }
+    axis /= s;
+    MTXRotAxisRad(m, &axis, std::atan2(s, c));
+}
+
+// Rigid delta rotating by rot (3x3 part) about pivot.
+inline void ikPivotDelta(const Mtx rot, const cXyz& pivot, Mtx delta) {
+    MTXCopy(rot, delta);
+    cXyz rp;
+    MTXMultVecSR(rot, &pivot, &rp);
+    delta[0][3] = pivot.x - rp.x;
+    delta[1][3] = pivot.y - rp.y;
+    delta[2][3] = pivot.z - rp.z;
+}
+
+// Skips zero-length (helper/twist) joints so the chain is hand -> forearm
+// -> upper arm by actual bone length.
+inline int ikParentWithLength(J3DModel* model, int joint) {
+    const cXyz p = ikPos(model->getAnmMtx(joint));
+    for (int j = s_ikParent[joint]; j >= 0; j = s_ikParent[j]) {
+        if ((ikPos(model->getAnmMtx(j)) - p).abs() > 3.f) return j;
+    }
+    return -1;
+}
+
+// Rigid-plus-stretch delta: scales by k along unit direction u through
+// pivot (3x3 = I + (k-1) u u^T), leaving the other two axes alone.
+inline void ikStretchDelta(const cXyz& pivot, const cXyz& u, f32 k, Mtx delta) {
+    const f32 s = k - 1.f;
+    const f32 uv[3] = {u.x, u.y, u.z};
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            delta[r][c] = (r == c ? 1.f : 0.f) + s * uv[r] * uv[c];
+        }
+    }
+    cXyz mp;
+    MTXMultVecSR(delta, &pivot, &mp);
+    delta[0][3] = pivot.x - mp.x;
+    delta[1][3] = pivot.y - mp.y;
+    delta[2][3] = pivot.z - mp.z;
+}
+
+// maxStretch: past full reach, both bones lengthen together (up to this
+// factor) so the arm still meets the hand; beyond it the wrist stretches.
+inline void ikSolveArm(J3DModel* model, int hand, int elbow, int shoulder, const Mtx target,
+                       const cXyz& poleDir, f32 maxStretch) {
+    const cXyz S = ikPos(model->getAnmMtx(shoulder));
+    const cXyz E0 = ikPos(model->getAnmMtx(elbow));
+    const cXyz W0 = ikPos(model->getAnmMtx(hand));
+    const cXyz T = ikPos(target);
+    const f32 L1 = (E0 - S).abs();
+    const f32 L2 = (W0 - E0).abs();
+    const cXyz toT = T - S;
+    const f32 dRaw = toT.abs();
+    if (L1 < 1e-3f || L2 < 1e-3f || dRaw < 1e-3f) return;
+    const cXyz dir = toT / dRaw;
+    const f32 stretch = std::min(std::max(dRaw / (L1 + L2), 1.f), std::max(maxStretch, 1.f));
+    const f32 L1s = L1 * stretch;
+    const f32 L2s = L2 * stretch;
+    const f32 d = std::min(std::max(dRaw, std::fabs(L1s - L2s) + 0.01f), (L1s + L2s) * 0.999f);
+
+    // Elbow position on the reach circle, toward the pole.
+    const f32 a = (L1s * L1s + d * d - L2s * L2s) / (2.f * d);
+    const f32 h = std::sqrt(std::max(0.f, L1s * L1s - a * a));
+    cXyz p = poleDir - dir * poleDir.inprod(dir);
+    if (p.abs() < 1e-4f) {
+        p = cXyz(0.f, -1.f, 0.f) - dir * (-dir.y);
+    }
+    if (p.abs() < 1e-4f) return;
+    p /= p.abs();
+    const cXyz E = S + dir * a + p * h;
+
+    // 1. Upper arm: swing about the shoulder.
+    Mtx rot;
+    Mtx delta;
+    ikRotFromTo(E0 - S, E - S, rot);
+    ikPivotDelta(rot, S, delta);
+    ikApplyToSubtree(model, shoulder, delta);
+    const bool stretched = stretch > 1.0001f;
+    if (stretched) {
+        cXyz u = E - S;
+        u /= u.abs();
+        ikStretchDelta(S, u, stretch, delta);
+        ikApplyToSubtree(model, shoulder, delta);
+    }
+
+    // 2. Forearm: keep the animation's forearm->hand rotation, aim it at the
+    // tracked hand's rotation, then swing onto the required bone direction.
+    MtxP F = model->getAnmMtx(elbow);
+    MtxP H = model->getAnmMtx(hand);
+    Mtx fRot, hRot, fInv, rel, relInv, ideal, tRot;
+    MTXCopy(F, fRot);
+    fRot[0][3] = fRot[1][3] = fRot[2][3] = 0.f;
+    MTXCopy(H, hRot);
+    hRot[0][3] = hRot[1][3] = hRot[2][3] = 0.f;
+    if (!MTXInverse(fRot, fInv)) return;
+    MTXConcat(fInv, hRot, rel);  // forearm -> hand
+    if (!MTXInverse(rel, relInv)) return;
+    MTXCopy(target, tRot);
+    tRot[0][3] = tRot[1][3] = tRot[2][3] = 0.f;
+    MTXConcat(tRot, relInv, ideal);  // forearm rotation that gives the hand the target's rotation
+    const cXyz Ecur = ikPos(F);
+    const cXyz boneWorld = ikPos(H) - Ecur;
+    cXyz boneLocal;
+    cXyz boneIdeal;
+    MTXMultVecSR(fInv, &boneWorld, &boneLocal);
+    MTXMultVecSR(ideal, &boneLocal, &boneIdeal);
+    Mtx swing, newF, curInv;
+    ikRotFromTo(boneIdeal, T - Ecur, swing);
+    MTXConcat(swing, ideal, newF);
+    newF[0][3] = Ecur.x;
+    newF[1][3] = Ecur.y;
+    newF[2][3] = Ecur.z;
+    if (!MTXInverse(F, curInv)) return;
+    MTXConcat(newF, curInv, delta);  // also drops the upper arm's stretch from the forearm
+    ikApplyToSubtree(model, elbow, delta);
+    if (stretched) {
+        cXyz v = T - Ecur;
+        if (v.abs() > 1e-4f) {
+            v /= v.abs();
+            ikStretchDelta(Ecur, v, stretch, delta);
+            ikApplyToSubtree(model, elbow, delta);
+        }
+    }
+
+    // 3. Hand: exactly the tracked hand.
+    if (!MTXInverse(model->getAnmMtx(hand), curInv)) return;
+    MTXConcat(target, curInv, delta);
+    ikApplyToSubtree(model, hand, delta);
+}
+}  // namespace detail
+
+// Moves a separately drawn model that sits on the body (base transform
+// already set for this frame) along with the head-anchored body.
+inline void applyBodyAnchorToModel(J3DModel* model) {
+    if (!model || !detail::s_bodyAnchorValid) return;
+    Mtx out;
+    MTXCopy(model->getBaseTRMtx(), out);
+    if (detail::s_ikFreezeActive) {
+        // The joint the model hangs off moved with the real (tumbling) pose;
+        // map it from there onto the frozen pose.
+        const cXyz p = detail::ikPos(out);
+        int best = -1;
+        f32 bestDist = 1e30f;
+        for (u16 j = 0; j < detail::s_ikJointNum; ++j) {
+            const f32 dist = (detail::ikPos(detail::s_ikActual[j]) - p).abs();
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = j;
+            }
+        }
+        Mtx inv, corr, tmp;
+        if (best >= 0 && MTXInverse(detail::s_ikActual[best], inv)) {
+            MTXConcat(detail::s_ikInterp[best], inv, corr);
+            MTXConcat(corr, out, tmp);
+            MTXCopy(tmp, out);
+        }
+    }
+    {
+        Mtx tmp;
+        MTXConcat(detail::s_bodyAnchorDelta, out, tmp);
+        MTXCopy(tmp, out);
+    }
+    model->setBaseTRMtx(out);
+    model->calc();
+}
+
+inline bool isFullBodyIkActive(daAlink_c* link) {
+    return link && dusk::getSettings().game.vrFullBody.getValue() && detail::s_handMtxValid &&
+           isFirstPerson(link) && !link->checkWolf() && !link->checkModeFlg(daAlink_c::MODE_SWIMMING) &&
+           !isCrawling(link) && !dComIfGp_isPauseFlag() && link->getClothesChangeWaitTimer() == 0;
+}
+
+// cameraEye: the head-center camera position this frame
+// (getVrCameraEyeAnchor()); headYawS: where the head faces
+// (dusk::vr::getHeadMoveAngleS()).
+inline void refreshFullBodyIkLive(const cXyz& cameraEye, s16 headYawS) {
+    detail::s_bodyAnchorValid = false;
+    detail::s_ikFreezeActive = false;
+    auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
+    if (!isFullBodyIkActive(link)) return;
+    J3DModel* model = link->mpLinkModel;
+    if (!model) return;
+    J3DModelData* data = model->getModelData();
+    const u16 jointNum = data->getJointNum();
+    constexpr int kLeftHand = 9;
+    constexpr int kRightHand = 0xE;
+    if (jointNum <= kRightHand || jointNum > 256) return;
+
+    if (isHandTrackingSuspended(link)) {
+        // Plain animated pose: no anchor, no IK. Still written and marked live
+        // so last frame's solved pose can't stay on screen until the next tick.
+        for (u16 j = 0; j < jointNum; ++j) {
+            if (!dusk::interp::lookup_interpolated(model->getAnmMtx(j), detail::s_ikScratch[j])) return;
+        }
+        for (u16 j = 0; j < jointNum; ++j) {
+            MTXCopy(detail::s_ikScratch[j], model->getAnmMtx(j));
+        }
+        model->calcWeightEnvelopeMtx();
+        markModelJointsLive(model);
+        return;
+    }
+
+    if (detail::s_ikModelData != data) {
+        for (int& p : detail::s_ikParent) p = -1;
+        detail::ikBuildParents(data->getJointNodePointer(0), -1);
+        detail::s_ikModelData = data;
+        detail::s_ikPoseValid = false;
+    }
+
+    // Interpolated pose into the buffer (see the section comment). All or
+    // nothing: between sim ticks the buffer still holds last frame's solved
+    // pose, so solving on top of a joint without a replacement would
+    // compound frame to frame. When no fresh pose is available (hit lag:
+    // stopped game time clears the interpolation history) or a tumbling move
+    // is frozen out (only with the head anchor, which is what makes it orbit),
+    // the last good pose is reused and anchoring/IK still run on it.
+    const bool headAnchor = dusk::getSettings().game.vrFullBodyHeadAnchor.getValue();
+    const bool freezePose = headAnchor && detail::s_ikPoseValid && isFullBodyTumbleProc(link);
+    if (!freezePose) {
+        bool fresh = true;
+        for (u16 j = 0; j < jointNum && fresh; ++j) {
+            fresh = dusk::interp::lookup_interpolated(model->getAnmMtx(j), detail::s_ikScratch[j]);
+        }
+        if (fresh) {
+            for (u16 j = 0; j < jointNum; ++j) {
+                MTXCopy(detail::s_ikScratch[j], detail::s_ikInterp[j]);
+            }
+            detail::s_ikPoseValid = true;
+        }
+    }
+    if (!detail::s_ikPoseValid) return;
+    // Body-mounted models follow the real pose; while frozen, keep the real
+    // pose too so applyBodyAnchorToModel() can map them onto the frozen one.
+    detail::s_ikFreezeActive = false;
+    if (freezePose) {
+        bool actual = true;
+        for (u16 j = 0; j < jointNum && actual; ++j) {
+            actual = dusk::interp::lookup_interpolated(model->getAnmMtx(j), detail::s_ikActual[j]);
+        }
+        detail::s_ikFreezeActive = actual;
+        detail::s_ikJointNum = jointNum;
+    }
+    for (u16 j = 0; j < jointNum; ++j) {
+        MTXCopy(detail::s_ikInterp[j], model->getAnmMtx(j));
+    }
+
+    const int lElbow = detail::ikParentWithLength(model, kLeftHand);
+    const int lShoulder = lElbow >= 0 ? detail::ikParentWithLength(model, lElbow) : -1;
+    const int rElbow = detail::ikParentWithLength(model, kRightHand);
+    const int rShoulder = rElbow >= 0 ? detail::ikParentWithLength(model, rElbow) : -1;
+    if (lShoulder < 0 || rShoulder < 0) return;
+
+    // Head anchor: move/turn the whole body so its eye point (the same
+    // head-joint offset setBodyPartPos() uses) sits at the camera and its
+    // torso faces the head yaw. This also removes the walking jitter: the
+    // camera anchor is extrapolated a tick ahead while the body is drawn
+    // interpolated, so unanchored the gap between them changed every tick.
+    // Torso facing comes from the shoulder line (sign fixed with
+    // shape_angle), so it matches the interpolated pose being drawn.
+    s16 bodyYaw = link->shape_angle.y;
+    {
+        const cXyz lS = detail::ikPos(model->getAnmMtx(lShoulder));
+        const cXyz rS = detail::ikPos(model->getAnmMtx(rShoulder));
+        cXyz fwd(lS.z - rS.z, 0.f, -(lS.x - rS.x));  // up x (left shoulder - right shoulder)
+        if (fwd.x * cM_ssin(bodyYaw) + fwd.z * cM_scos(bodyYaw) < 0.f) {
+            fwd.x = -fwd.x;
+            fwd.z = -fwd.z;
+        }
+        if (fwd.abs() > 1e-3f) {
+            bodyYaw = cM_atan2s(fwd.x, fwd.z);
+        }
+    }
+    if (headAnchor && link->field_0x30b4 < jointNum) {
+        static const Vec kLocalEye = {12.0f, -8.0f, 0.0f};  // setBodyPartPos()'s human localEye
+        cXyz eye;
+        MTXMultVec(model->getAnmMtx(link->field_0x30b4), &kLocalEye, &eye);
+        const s16 deltaYaw = static_cast<s16>(headYawS - bodyYaw);
+        Mtx rot;
+        MTXRotRad(rot, 'Y', cM_s2rad(deltaYaw));
+        Mtx& delta = detail::s_bodyAnchorDelta;
+        MTXCopy(rot, delta);
+        cXyz rEye;
+        MTXMultVecSR(rot, &eye, &rEye);
+        delta[0][3] = cameraEye.x - rEye.x;
+        delta[1][3] = cameraEye.y - rEye.y;
+        delta[2][3] = cameraEye.z - rEye.z;
+        for (u16 j = 0; j < jointNum; ++j) {
+            Mtx out;
+            MTXConcat(delta, model->getAnmMtx(j), out);
+            MTXCopy(out, model->getAnmMtx(j));
+        }
+        detail::s_bodyAnchorValid = true;
+        bodyYaw = headYawS;
+    }
+
+    // Pole: elbows point down, outward (away from the other shoulder) and a
+    // little back.
+    const cXyz lS = detail::ikPos(model->getAnmMtx(lShoulder));
+    const cXyz rS = detail::ikPos(model->getAnmMtx(rShoulder));
+    cXyz out = lS - rS;
+    out.y = 0.f;
+    if (out.abs() > 1e-3f) out /= out.abs();
+    const s16 yaw = bodyYaw;
+    const cXyz back(-cM_ssin(yaw), 0.f, -cM_scos(yaw));
+    const cXyz down(0.f, -1.f, 0.f);
+    const f32 maxStretch = dusk::getSettings().game.vrArmStretchMax.getValue();
+    detail::ikSolveArm(model, kLeftHand, lElbow, lShoulder, detail::s_leftHandMtx,
+                       down + out * 0.6f + back * 0.3f, maxStretch);
+    detail::ikSolveArm(model, kRightHand, rElbow, rShoulder, detail::s_rightHandMtx,
+                       down - out * 0.6f + back * 0.3f, maxStretch);
+
+    model->calcWeightEnvelopeMtx();
+    markModelJointsLive(model);
+}
+
+// ---------------------------------------------------------------------------
+// Carried objects follow the hands at frame rate (first person, 2026-10-14)
+//
+// setGrabItemPos() places the carried actor from the midpoint of
+// mLeftHandPos/mRightHandPos, which setBodyPartPos() overrides with the
+// tracked hands -- but only once per sim tick, from the previous frame's
+// hand matrices. With the hands and (Full Body) the arms now drawn every
+// frame, the object visibly lagged and stepped behind them.
+//
+// Fix: each real frame, take the carried model's base matrix as the game set
+// it this tick and translate it by how far the tracked hand midpoint has moved
+// since the tick (setBodyPartPos() reports the midpoint it used via
+// noteTrackedHandMidpoint()). Translation only; the object's own rotation
+// stays tick-rate. The object's own base setup isn't re-run because
+// daObjCarry_c's accumulates a rotation per call. Covered: daObjCarry_c
+// (pots, barrels, boxes, skulls), daNbomb_c (bombs), daObjStone_c (small
+// rocks). Other carried actors keep tick-rate motion. Assumes the object
+// builds its base after Link's execute in the same tick (the player is
+// created before room objects, so it executes first).
+// ---------------------------------------------------------------------------
+
+namespace detail {
+inline cXyz s_grabTickMid;
+inline bool s_grabTickMidValid = false;
+inline uint64_t s_grabCaptureTick = ~0ull;
+inline J3DModel* s_grabCaptureModel = nullptr;
+inline Mtx s_grabCaptureBase;
+inline cXyz s_grabCaptureMid;
+}  // namespace detail
+
+inline void noteTrackedHandMidpoint(bool valid, const cXyz& mid) {
+    detail::s_grabTickMidValid = valid;
+    detail::s_grabTickMid = mid;
+}
+
+inline J3DModel* getCarriedModel(fopAc_ac_c* actor) {
+    if (!actor || !fopAc_IsActor(actor)) return nullptr;
+    switch (fopAcM_GetName(actor)) {
+    case fpcNm_Obj_Carry_e:
+        return static_cast<daObjCarry_c*>(actor)->mpModel;
+    case fpcNm_NBOMB_e:
+        return static_cast<daNbomb_c*>(actor)->mpModel;
+    case fpcNm_Obj_Stone_e:
+        return static_cast<daObjStone_c*>(actor)->mpModel;
+    default:
+        return nullptr;
+    }
+}
+
+inline void refreshCarriedItemLive() {
+    auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
+    if (!link || !detail::s_handMtxValid || !detail::s_grabTickMidValid || !isFirstPerson(link) ||
+        isHandTrackingSuspended(link)) return;
+    fopAc_ac_c* actor = link->mGrabItemAcKeep.getActor();
+    J3DModel* model = getCarriedModel(actor);
+    if (!model) {
+        detail::s_grabCaptureModel = nullptr;
+        return;
+    }
+    // Only while the object really sits at the hands (not the pick-up/put-
+    // down phases, which place it from Link's body instead).
+    if ((actor->current.pos - detail::s_grabTickMid).abs() > 60.f) return;
+
+    const uint64_t tick = dusk::interp::sim_tick_seq();
+    if (detail::s_grabCaptureTick != tick || detail::s_grabCaptureModel != model) {
+        detail::s_grabCaptureTick = tick;
+        detail::s_grabCaptureModel = model;
+        MTXCopy(model->getBaseTRMtx(), detail::s_grabCaptureBase);
+        detail::s_grabCaptureMid = detail::s_grabTickMid;
+    }
+
+    const cXyz fresh = (detail::ikPos(detail::s_leftHandMtx) + detail::ikPos(detail::s_rightHandMtx)) * 0.5f;
+    const cXyz d = fresh - detail::s_grabCaptureMid;
+    Mtx base;
+    MTXCopy(detail::s_grabCaptureBase, base);
+    base[0][3] += d.x;
+    base[1][3] += d.y;
+    base[2][3] += d.z;
+    model->setBaseTRMtx(base);
+    model->calc();
+    markModelJointsLive(model);
+}
+
 // ACTUAL FIX for sword/shield lag (2026-08-09), same root cause and same
 // fix shape as refreshTrackedHandDrawMtxLive() above: applyTrackedItemMtx()
 // above is only ever called from d_a_alink.cpp, inside daAlink_c::draw() --
@@ -2218,8 +2842,11 @@ inline void refreshTrackedItemMtxLive() {
     // setItemMatrix()'s exact conditions) instead of re-deriving "is this
     // attached" from position data that's legitimately stale by
     // construction during fast animation.
-    const bool swordAttached = link->checkItemSwordEquip();
-    const bool shieldAttached = link->checkShieldHandAttached();
+    // Show Roll Animations: in-hand sword/shield follow the animated hands
+    // (resting-pose smoothing of the game's own item-joint placement).
+    const bool tracked = !isHandTrackingSuspended(link);
+    const bool swordAttached = tracked && link->checkItemSwordEquip();
+    const bool shieldAttached = tracked && link->checkShieldHandAttached();
 
     // SWORD/SHIELD HAND SWAP -- "Swap Sword/Shield Hands" VR setting
     // (2026-08-20, explicit user request). itemJointMtx/handJointMtx are
@@ -2310,6 +2937,7 @@ inline void refreshTrackedItemMtxLive() {
         if (!swordUpdated) {
             refreshRestingPoseSmoothed(swordModel, detail::s_swordRestingTick, detail::s_swordRestingValid,
                                         detail::s_swordRestingPrevMtx, detail::s_swordRestingCurrMtx);
+            applyBodyAnchorToModel(swordModel);
         }
         markModelJointsLive(swordModel);
     }
@@ -2320,8 +2948,17 @@ inline void refreshTrackedItemMtxLive() {
         if (!shieldUpdated) {
             refreshRestingPoseSmoothed(shieldModel, detail::s_shieldRestingTick, detail::s_shieldRestingValid,
                                         detail::s_shieldRestingPrevMtx, detail::s_shieldRestingCurrMtx);
+            applyBodyAnchorToModel(shieldModel);
         }
         markModelJointsLive(shieldModel);
+    }
+    // The sheath always sits on the body; only touched while the head anchor
+    // moves the body (otherwise the game's own interpolation is right).
+    if (J3DModel* sheathModel = link->getSheathModel(); sheathModel && detail::s_bodyAnchorValid) {
+        refreshRestingPoseSmoothed(sheathModel, detail::s_sheathRestingTick, detail::s_sheathRestingValid,
+                                    detail::s_sheathRestingPrevMtx, detail::s_sheathRestingCurrMtx);
+        applyBodyAnchorToModel(sheathModel);
+        markModelJointsLive(sheathModel);
     }
 }
 
@@ -2459,8 +3096,14 @@ inline void refreshTrackedHeldItemMtxLive() {
                                      handJointMtx, trackedHandMtx);
 
         const bool attached = (attach != HeldItemAttach::None) && detail::s_heldItemRawBasis.valid;
-        if (applyTrackedItemMtxIfAttached(heldItemModel, attached, detail::s_heldItemRawBasis.mtx,
-                                           handJointMtx, trackedHandMtx)) {
+        if (attached && isHandTrackingSuspended(link)) {
+            // Show Roll Animations: follow the animated hand instead.
+            refreshRestingPoseSmoothed(heldItemModel, detail::s_heldItemRestingTick,
+                                        detail::s_heldItemRestingValid, detail::s_heldItemRestingPrevMtx,
+                                        detail::s_heldItemRestingCurrMtx);
+            markModelJointsLive(heldItemModel);
+        } else if (applyTrackedItemMtxIfAttached(heldItemModel, attached, detail::s_heldItemRawBasis.mtx,
+                                                  handJointMtx, trackedHandMtx)) {
             markModelJointsLive(heldItemModel);
         }
         // attach == None (head-item / hookshot / iron ball): leave
@@ -2475,13 +3118,15 @@ inline void refreshTrackedHeldItemMtxLive() {
 
         const HeldItemAttach attach = computeKanteraAttach(link);
         MtxP handJointMtx = bodyModel->getAnmMtx(link->getLeftHandJntNo());
-        const bool attached = (attach == HeldItemAttach::Left) && detail::s_kanteraRawBasis.valid;
+        const bool attached = (attach == HeldItemAttach::Left) && detail::s_kanteraRawBasis.valid &&
+                              !isHandTrackingSuspended(link);
 
         const bool updated = applyTrackedItemMtxIfAttached(
             kanteraModel, attached, detail::s_kanteraRawBasis.mtx, handJointMtx, detail::s_leftHandMtx);
         if (!updated) {
             refreshRestingPoseSmoothed(kanteraModel, detail::s_kanteraRestingTick, detail::s_kanteraRestingValid,
                                         detail::s_kanteraRestingPrevMtx, detail::s_kanteraRestingCurrMtx);
+            applyBodyAnchorToModel(kanteraModel);
         }
         markModelJointsLive(kanteraModel);
 
@@ -2665,7 +3310,7 @@ inline void refreshTrackedItemJointMtxLive() {
     detail::s_trackedItemJointMtxValid = false;
 
     auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
-    if (!link || !detail::s_handMtxValid || !isFirstPerson(link)) return;
+    if (!link || !detail::s_handMtxValid || !isFirstPerson(link) || isHandTrackingSuspended(link)) return;
 
     J3DModel* bodyModel = link->getBodyModel();
     if (!bodyModel) return;

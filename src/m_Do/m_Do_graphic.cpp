@@ -2573,22 +2573,11 @@ int mDoGph_Painter() {
             fapGm_HIO_c::startCpuTimer();
             #endif
 
-            // User request this session: shadow stretching in VR
-            // (giant thin lines/static across the ground) resisted
-            // extensive investigation this session -- matrix math, float
-            // precision, frame-interpolation timing, shader
-            // texture-coordinate generation, and texture wrap mode were all
-            // checked and ruled out as the direct cause. Hiding entirely
-            // for now rather than leaving the distracting visual in place;
-            // revisit properly in a future session.
-            //
-            // CONFIRMED still stretched even after the double-precision
-            // fixes in setShadowRealMtx() (d_drawlist.cpp) and
-            // eyePoseToViewMtx() (vr_stereo_render.hpp) -- those were not
-            // the (or not the only) root cause. Re-disabled after a
-            // mistaken re-enable; do not re-enable again without new
-            // diagnostic evidence.
-            if (!dusk::vr::isRenderingToHeadset()) {
+            // VR: only when the "Shadows" VR setting built this frame's
+            // shadows before the eye pass (vr_main.cpp's shadow step). The
+            // old stretching came from shadow maps that were never rendered
+            // in VR plus shadows registered several times per frame.
+            if (!dusk::vr::isImmersiveVr() || dusk::vr::areVrShadowsActive()) {
                 GX_DEBUG_GROUP(dComIfGd_drawShadow, camera_p->view.viewMtx);
             }
 
@@ -2860,7 +2849,7 @@ int mDoGph_Painter() {
                 // half only (aurora's copy_tex halves it) -- the blur then
                 // shows left-eye content in both eyes, which for a full-
                 // screen blur is fine.
-                if (!dusk::vr::isRenderingToHeadset() || g_env_light.is_blure) {
+                if (!dusk::vr::isImmersiveVr() || g_env_light.is_blure) {
                     retry_captue_frame(&camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id));
                 }
                 // VR (2026-09-21): everything that samples this shared capture
@@ -2874,8 +2863,8 @@ int mDoGph_Painter() {
                 // the effects simply vanish, and the underwater blur (the one
                 // consumer whose capture does run) still gets its real data.
                 // In-stream, so it orders correctly against queued draws;
-                // cleared again on every flatscreen frame.
-                GXSetCopyTexFreshOnly(mDoGph_gInf_c::getFrameBufferTex(), dusk::vr::isRenderingToHeadset());
+                // cleared outside immersive-VR frames, including screen mode.
+                GXSetCopyTexFreshOnly(mDoGph_gInf_c::getFrameBufferTex(), dusk::vr::isImmersiveVr());
 
                 #if DEBUG
                 // "Frame Buffer capture 2nd time (Rendering)"
@@ -2927,14 +2916,14 @@ int mDoGph_Painter() {
                 // this list, so rather than re-enable the whole pass, draw
                 // just the odour packet in VR. dKyr_odour_draw() has its own
                 // VR branch (eye-view billboarding, no frame-buffer sample).
-                if (!dusk::vr::isRenderingToHeadset()) {
+                if (!dusk::vr::isImmersiveVr()) {
                     GX_DEBUG_GROUP(dComIfGd_drawIndScreen);
                 } else if (g_env_light.mOdourData.mpOdourPacket != NULL) {
                     g_env_light.mOdourData.mpOdourPacket->draw();
                 }
 
                 if (strcmp(dComIfGp_getStartStageName(), "F_SP124") == 0 &&
-                    !dusk::vr::isRenderingToHeadset()) {
+                    !dusk::vr::isImmersiveVr()) {
                     retry_captue_frame(&camera_p->view, view_port,
                                        dComIfGp_getCameraZoomForcus(camera_id));
                 }
@@ -2974,7 +2963,7 @@ int mDoGph_Painter() {
                 {
                     u8 enable = mDoGph_gInf_c::getBloom()->getEnable();
                     GXColor color = *mDoGph_gInf_c::getBloom()->getMonoColor();
-                    if ((color.a != 0 || enable) && !dusk::vr::isRenderingToHeadset()) {
+                    if ((color.a != 0 || enable) && !dusk::vr::isImmersiveVr()) {
                         retry_captue_frame(&camera_p->view, view_port,
                                            dComIfGp_getCameraZoomForcus(camera_id));
                     }
@@ -3006,7 +2995,7 @@ int mDoGph_Painter() {
                 if (g_kankyoHIO.navy.field_0x30d != 0 && dKy_darkworld_check() == TRUE) {
                     dComIfGd_drawOpaListDark();
                     dComIfGd_drawXluListDark();
-                    if (!dusk::vr::isRenderingToHeadset()) {
+                    if (!dusk::vr::isImmersiveVr()) {
                         retry_captue_frame(&camera_p->view, view_port,
                                            dComIfGp_getCameraZoomForcus(camera_id));
                     }
@@ -3113,7 +3102,9 @@ int mDoGph_Painter() {
     }
     #endif
 
-    if (!dusk::vr::isRenderingToHeadset()) {
+    // Screen mode keeps the flat HUD inside the game image; immersive VR
+    // instead shares one cached HUD texture across the eye passes.
+    if (!dusk::vr::isRenderingToHeadset() || dusk::vr::isVrScreenMode()) {
         mDoGph_drawHud2D();
     } else {
         dusk::vr::drawCutsceneFrameIfActive();

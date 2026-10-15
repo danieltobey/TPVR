@@ -34,4 +34,4 @@ Spec-driven development for the TPVR comfort, lighting, audio and presentation w
 | Dynamic resolution scaling | 📝 To be specified |
 | Performance investigation | 📝 To be specified |
 
-All behaviour here is VR-only; flatscreen play is unchanged.
+All behaviour here is VR-only; flatscreen play is unchanged. Upstream's Giant Screen view mode (2026-10) shows the flat game in the headset, and the immersive-VR fixes (lighting, sky, audio, movement) are off while it's selected.
