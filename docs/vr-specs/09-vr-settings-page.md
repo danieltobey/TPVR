@@ -40,7 +40,7 @@
 | Graphics | VR Render Resolution · Sharpening · Single-Pass Stereo · High Clocks |
 | PC Display | VR Desktop Mirror · VR Brightness Compensation · VR Brightness Compensation (SteamVR) |
 
-Not on the page (config file only): Attach Body Rotation to Headset (known movement lock-ups), Application SpaceWarp (parked), display refresh rate (`game.vrDisplayRefreshRate`, 72 Hz; spec 13 decides whether it gets a setting), the retired Show Link's Body.
+Not on the page (config file only): Attach Body Rotation to Headset (known movement lock-ups), Application SpaceWarp (parked), display refresh rate (`game.vrDisplayRefreshRate`, 72 Hz; the performance target is 72 Hz, spec 13), the retired Show Link's Body.
 
 ## Verification
 Walk the page in the headset: order, wording, defaults and greying match this spec, including switching View Mode through all three choices. 🟡
