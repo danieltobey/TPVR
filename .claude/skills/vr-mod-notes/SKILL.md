@@ -15539,3 +15539,125 @@ gates the legacy once-per-tick tracked writes in `d_a_alink.cpp`
 (`applyTrackedHandMtx`, `applyTrackedItemMtx`) and the carry hand override,
 so the interpolation snapshot isn't poisoned with tracked poses mid-roll.
 Camera unchanged (core anchor), so the body tumbles below/around the view.
+
+### OPEN, resume here: items broken with Full Body (reported 2026-10-14, NOT investigated yet)
+
+User report (deferred to next session): most items don't track or attach to
+the hands. Lantern and iron boots show their normal positions/animations;
+iron boots appear in the game world, not on Link's feet; bow not held in
+hand; ball and chain moves Link's whole body.
+
+Likely causes, from code reading only, unverified:
+1. **Mixed spaces after the head anchor.** `refreshFullBodyIkLive()` now
+   rewrites the body buffer with the anchored + IK'd pose (moved to the
+   camera, turned to head yaw). Sword/shield read BOTH their item joint and
+   hand joint from that buffer, so their relative offset is consistent and
+   they work. But `mHeldItemModel`/`mpKanteraModel` use
+   `captureRawBasisOnce()` (the game's tick-space base) against
+   `bodyModel->getAnmMtx(handJnt)` (now anchored-space) in
+   `computeTrackedItemMtx()` -> garbage offset -> bow/lantern not in hand.
+   Fix direction: compute the relative offset in one space, e.g. from the
+   body's interpolated (pre-anchor) hand joint (`s_ikInterp` /
+   `lookup_interpolated`) or from the tick-space joint, never the anchored
+   buffer.
+2. **Unrefreshed body-mounted models.** Iron boots (and anything else the
+   game places from body joints once per tick that VR never refreshes) stay
+   where the un-anchored body is. Fix direction: give them the
+   `refreshRestingPoseSmoothed()` + `applyBodyAnchorToModel()` + live
+   treatment the sheath got, or hide them in first person like the stowed
+   gear. Need the boot model fields first.
+3. **Ball and chain swinging the body.** The anchor's torso yaw comes from
+   the shoulder line; the iron ball animation twists the upper body, so
+   "rotate torso yaw to head yaw" swings the whole body around. Fix
+   direction: take body yaw from a lower joint (waist/root) or from
+   `shape_angle.y` corrected to the interpolated pose, or skip the yaw part
+   during iron-ball procs. Also check whether the iron ball's own chain/ball
+   placement reads body joints (it'd be in anchored space now).
+Start by checking each against Full Body / Body Follows Headset off: if the
+item works with Body Follows Headset off, it's cause 1/2/3; if it's broken
+with Full Body off entirely, it's something else.
+
+**Fixes for the above, 2026-10-15 — built (PC clean), NOT yet tested in-headset.**
+All three causes were confirmed by reading the code (not by testing):
+1. **Held items / lantern** (`vr_link_visibility.hpp`): `refreshTrackedHeldItemMtxLive()`
+   computed the item's offset from the body's hand joint AFTER Full Body IK had
+   moved that joint onto the tracked hand, so the offset collapsed and the item
+   stayed where `setItemMatrix()` put it. New `captureRawBodyJointsOnce()` saves
+   both hand joints + the body root on the first real frame after each sim tick
+   (before the IK rewrites the buffer; called at the top of
+   `refreshFullBodyIkLive()`); `detail_pickHeldItemHandRefs()` and the lantern
+   branch now use those. Sword/shield/`getLeftItemMatrix()` read item+hand joints
+   from the same buffer, so they were already consistent and are unchanged.
+2. **Iron boots**: new `refreshBootsLive()` redoes `setItemMatrix()`'s leg-joint
+   copy (body 0x13-0x15 -> boot[0] joints 1-3; 0x18-0x1A * XrotS(-0x8000) ->
+   boot[1]) from the live body buffer every frame, moves boot joint 0 by how far
+   the body root moved since the tick, marks live. Called at the end of
+   `refreshFullBodyIkLive()` (all paths that rewrote the buffer, incl. Show Roll).
+   Needs `mpLinkBootModels`/`checkEquipHeavyBoots()` (public).
+3. **Ball and chain spinning the body**: head-anchor body yaw now comes from the
+   hip line (`ikTopOfSide(0x13, 0x18)` and vice versa -- the topmost joint of
+   each leg chain below their common ancestor) instead of the shoulder line,
+   falling back to shoulders if the two are < 3 units apart. Applies to every
+   move, not just the iron ball -- if body facing now feels off while
+   walking/attacking, this is the change to suspect. The head anchor's
+   TRANSLATION still follows the head joint, so big head lunges still slide the
+   body.
+Not touched: the iron ball's chain root still starts at the tick-time hand
+joint 15 (world-simulated), not the tracked hand.
+
+**Follow-up 2026-10-15 (user test of the above): held items now track, but three
+more issues. Fixed, built (PC clean), NOT yet retested:**
+1. **Lantern flame stayed at the normal-gameplay spot.** Real cause: the 2.0
+   particle-interpolation rewrite (`src/dusk/interp/particle.cpp`) replaces each
+   drawn particle's position with its per-tick history in `present()`/`position()`
+   and `emitter_position()`, ignoring `mark_live_this_frame()` -- so the 2026-08-13
+   per-frame flame rewrite has been discarded since the merge. Added
+   `particle::clear_live_positions()` / `mark_live_position(particle|emitter)`:
+   marked ones draw their real position (age/color/scale still interpolate).
+   `refreshTrackedHeldItemMtxLive()` clears the set each frame and the flame loop
+   re-marks its particles + emitter. Reuse this for any other per-frame particle
+   placement.
+2. **Dominion Rod orb floated at the resting rod spot.** `daCrod_c::execute()`
+   places the orb once per tick from `mHeldItemModel->getAnmMtx(0)` (the game's
+   placement, before VR moves the rod). New `daCrod_c::applyRodAttachedTransform()`
+   (PC-only, param 0/1 = orb on the rod) + `vr_link::refreshCopyRodBallLive()`
+   (tick(), right after the held-item refresh, only when the held item was
+   tracked this frame): re-place, calc, mark live.
+3. **Body jumbled on the Spinner.** `isFullBodyIkActive()` now excludes
+   `checkSpinnerRide()`/`checkSpinnerReady()` -- plain animated body there, like
+   swimming (tracked hands stay separate from the body's arms while riding).
+
+**Follow-up 2026-10-15 (retest):** lantern flame CONFIRMED fixed; Spinner body
+CONFIRMED fixed. Dominion Rod orb still at the base-game spot (Full Body on and
+off) -- `refreshCopyRodBallLive()` looked the orb up via `getCopyRodActor()`
+(`mCopyRodAcKeep`), which is only filled after a throw; while held the orb is in
+`mItemAcKeep` (see `throwCopyRod()`), so the refresh never ran. Now checks
+`mItemAcKeep` first. Also new: `kSpinnerCameraDownUnits` (1 ft) subtracted from
+the core-anchored eye while `checkSpinnerRide()/checkSpinnerReady()` (user
+request). Both built, NOT yet retested.
+**CONFIRMED FIXED IN-HEADSET 2026-10-15** -- Dominion Rod orb follows the tracked
+rod, and the Spinner camera offset (1 ft down) feels right. Still untested from
+the item-IK round: iron boots on the feet, ball-and-chain no longer spinning the
+body (hip-line yaw), bow in hand.
+
+**2026-10-15: "Body Follows Headset" is now always on with Full Body** (user
+request). `game.vrFullBodyHeadAnchor` ConfigVar, its registration and the VR-tab
+toggle were removed; `refreshFullBodyIkLive()` uses `constexpr bool headAnchor =
+true`. The separate hidden `vrAttachBodyRotationToHead` (gameplay `shape_angle`
+forcing, default off, open "body in front of me on rotation" bug) is untouched.
+Built clean, not retested.
+
+### "Turn With Epona" (default ON) — CONFIRMED WORKING IN-HEADSET 2026-10-16 ("That works")
+
+`game.vrTurnWithEpona` (settings.h/.cpp), VR tab > Turning, after Snap Turn
+Angle. `vr_main.cpp` tick(), right after the Third Person "Turn With Game
+Camera" block: while `checkReinRide()` and no event, Epona's
+`shape_angle.y` change is added to the smooth-turn yaw via
+`snapScriptedCameraYaw()`. Her yaw only updates per sim tick, so a smoothed
+yaw (exponential, `kEponaTurnSmoothingSec` = 0.1s) eases toward it and only
+the smoothed step is applied. Re-bases (no turn) on the first riding frame
+and on a single-tick change of 25+ degrees. Skipped in Third Person when
+"Turn With Game Camera" is on (that already follows the camera, which
+follows Epona). Risk to watch: if horse steering is relative to the view,
+holding the stick sideways may keep turning; and whether the follow feels
+too strong on tight turns.

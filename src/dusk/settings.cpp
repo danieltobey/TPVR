@@ -109,7 +109,6 @@ UserSettings g_userSettings = {
         .vrHudOnLeftArm {"game.vrHudOnLeftArm", false},
         .vrShadows {"game.vrShadows", false},
         .vrFullBody {"game.vrFullBody", true},
-        .vrFullBodyHeadAnchor {"game.vrFullBodyHeadAnchor", true},
         .vrFullBodyShowRolls {"game.vrFullBodyShowRolls", false},
         .vrArmStretchMax {"game.vrArmStretchMax", 1.25f},
         .vrThirdPerson {"game.vrThirdPerson", false},
@@ -177,11 +176,11 @@ UserSettings g_userSettings = {
         .vrSmoothTurnSpeed {"game.vrSmoothTurnSpeed", 135},
         .vrSnapTurn {"game.vrSnapTurn", false},
         .vrSnapTurnAngle {"game.vrSnapTurnAngle", 45},
+        .vrTurnWithEpona {"game.vrTurnWithEpona", true},
         .vrStableCamera {"game.vrStableCamera", true},
         .vrMovementEnhancements {"game.vrMovementEnhancements", true},
         .vrLightingMode {"game.vrLightingMode", VrLightingMode::SunMoon},
         .vrCutsceneFaceCamera {"game.vrCutsceneFaceCamera", true},
-        .vrHorseTurnView {"game.vrHorseTurnView", true},
         .vrCutsceneFollowTurns {"game.vrCutsceneFollowTurns", true},
         .vrCutsceneView {"game.vrCutsceneView", VrCutsceneView::Window},
         .vrHudDistance {"game.vrHudDistance", 90},
@@ -448,7 +447,6 @@ void registerSettings() {
     Register(g_userSettings.game.vrHudOnLeftArm);
     Register(g_userSettings.game.vrShadows);
     Register(g_userSettings.game.vrFullBody);
-    Register(g_userSettings.game.vrFullBodyHeadAnchor);
     Register(g_userSettings.game.vrFullBodyShowRolls);
     Register(g_userSettings.game.vrArmStretchMax);
     Register(g_userSettings.game.vrThirdPerson);
@@ -475,11 +473,11 @@ void registerSettings() {
     Register(g_userSettings.game.vrSmoothTurnSpeed);
     Register(g_userSettings.game.vrSnapTurn);
     Register(g_userSettings.game.vrSnapTurnAngle);
+    Register(g_userSettings.game.vrTurnWithEpona);
     Register(g_userSettings.game.vrStableCamera);
     Register(g_userSettings.game.vrMovementEnhancements);
     Register(g_userSettings.game.vrLightingMode);
     Register(g_userSettings.game.vrCutsceneFaceCamera);
-    Register(g_userSettings.game.vrHorseTurnView);
     Register(g_userSettings.game.vrCutsceneFollowTurns);
     Register(g_userSettings.game.vrCutsceneView);
     Register(g_userSettings.game.vrHudDistance);

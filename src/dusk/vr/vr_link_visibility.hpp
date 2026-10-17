@@ -24,6 +24,8 @@
 #include "d/d_com_inf_game.h"
 #include "m_Do/m_Do_ext.h"  // mDoExt_McaMorf::getModel(), for the fishing rod's live-refresh
 #include "dusk/interp/frame_interpolation.h"
+#include "dusk/interp/particle.h"
+#include "d/actor/d_a_crod.h"
 #include "f_op/f_op_view.h"
 #include "JSystem/J3DGraphAnimator/J3DModel.h"
 #include "JSystem/J3DGraphAnimator/J3DModelData.h"
@@ -2246,6 +2248,33 @@ inline void markModelJointsLive(J3DModel* model) {
     }
 }
 
+// Body joints as the game computed them this sim tick, captured on the first
+// real frame after each tick -- before Full Body IK rewrites the body's joint
+// buffer. Anything the game placed from body joints during execute
+// (setItemMatrix(): held items, lantern, iron boots) is in this space, so its
+// offset from a body joint has to be measured against these, not against the
+// buffer after IK (the IK puts the hand joints exactly on the tracked hands,
+// which made held items compute a zero offset and stay where the game put them).
+namespace detail {
+inline Mtx s_rawLeftHandJointMtx;
+inline Mtx s_rawRightHandJointMtx;
+inline Mtx s_rawBodyRootMtx;
+inline uint64_t s_rawBodyJointTick = ~0ull;
+inline bool s_rawBodyJointValid = false;
+}  // namespace detail
+
+inline void captureRawBodyJointsOnce(daAlink_c* link) {
+    if (!link || !link->mpLinkModel) return;
+    const uint64_t tick = dusk::interp::sim_tick_seq();
+    if (detail::s_rawBodyJointValid && detail::s_rawBodyJointTick == tick) return;
+    J3DModel* body = link->mpLinkModel;
+    detail::s_rawBodyJointTick = tick;
+    MTXCopy(body->getAnmMtx(link->getLeftHandJntNo()), detail::s_rawLeftHandJointMtx);
+    MTXCopy(body->getAnmMtx(link->getRightHandJntNo()), detail::s_rawRightHandJointMtx);
+    MTXCopy(body->getAnmMtx(0), detail::s_rawBodyRootMtx);
+    detail::s_rawBodyJointValid = true;
+}
+
 // ---------------------------------------------------------------------------
 // Full body IK (game.vrFullBody, default on, added 2026-10-14)
 //
@@ -2327,6 +2356,15 @@ inline bool ikIsInSubtree(int joint, int root) {
         if (j == root) return true;
     }
     return false;
+}
+
+// Topmost ancestor of `joint` (itself included) that is not also an ancestor
+// of `other` -- for two legs, the thigh/hip joint just below the pelvis.
+inline int ikTopOfSide(int joint, int other) {
+    if (joint < 0 || joint >= 256 || ikIsInSubtree(other, joint)) return -1;
+    int j = joint;
+    while (s_ikParent[j] >= 0 && !ikIsInSubtree(other, s_ikParent[j])) j = s_ikParent[j];
+    return j;
 }
 
 // anm[j] = delta * anm[j] for root and every joint under it.
@@ -2527,10 +2565,56 @@ inline void applyBodyAnchorToModel(J3DModel* model) {
     model->calc();
 }
 
+// Iron boots: setItemMatrix() copies the leg joints into the two boot models
+// once per sim tick (d_a_alink.cpp, checkEquipHeavyBoots()). Once Full Body
+// rewrites the body's joint buffer every frame (interpolated, head-anchored),
+// those tick-time copies no longer match the drawn legs, so the boots were
+// left standing where the un-anchored body would be. Redo the same copy from
+// the body buffer as it stands now. Joint 0 (root) is moved by how far the
+// body root moved since the tick.
+namespace detail {
+inline Mtx s_bootRawRootMtx[2];
+inline uint64_t s_bootRawTick = ~0ull;
+}  // namespace detail
+
+inline void refreshBootsLive(daAlink_c* link) {
+    if (!link->checkEquipHeavyBoots() || !detail::s_rawBodyJointValid) return;
+    J3DModel* body = link->mpLinkModel;
+    J3DModel* boots[2] = {link->mpLinkBootModels[0], link->mpLinkBootModels[1]};
+    if (!boots[0] || !boots[1]) return;
+    const uint64_t tick = dusk::interp::sim_tick_seq();
+    if (detail::s_bootRawTick != tick) {
+        detail::s_bootRawTick = tick;
+        for (int i = 0; i < 2; ++i) MTXCopy(boots[i]->getAnmMtx(0), detail::s_bootRawRootMtx[i]);
+    }
+    Mtx rootInv, rootCorr;
+    if (!MTXInverse(detail::s_rawBodyRootMtx, rootInv)) return;
+    MTXConcat(body->getAnmMtx(0), rootInv, rootCorr);
+    Mtx flipX;
+    MTXRotRad(flipX, 'X', cM_s2rad(static_cast<s16>(-0x8000)));  // setItemMatrix()'s XrotS(-0x8000)
+    for (int i = 0; i < 2; ++i) {
+        MTXConcat(rootCorr, detail::s_bootRawRootMtx[i], boots[i]->getAnmMtx(0));
+        const int first = i == 0 ? 0x13 : 0x18;
+        for (int k = 0; k < 3; ++k) {
+            if (i == 0) {
+                MTXCopy(body->getAnmMtx(first + k), boots[i]->getAnmMtx(1 + k));
+            } else {
+                MTXConcat(body->getAnmMtx(first + k), flipX, boots[i]->getAnmMtx(1 + k));
+            }
+        }
+        if (boots[i]->getModelData()->getWEvlpMtxNum() > 0) boots[i]->calcWeightEnvelopeMtx();
+        markModelJointsLive(boots[i]);
+    }
+}
+
 inline bool isFullBodyIkActive(daAlink_c* link) {
     return link && dusk::getSettings().game.vrFullBody.getValue() && detail::s_handMtxValid &&
            isFirstPerson(link) && !link->checkWolf() && !link->checkModeFlg(daAlink_c::MODE_SWIMMING) &&
-           !isCrawling(link) && !dComIfGp_isPauseFlag() && link->getClothesChangeWaitTimer() == 0;
+           !isCrawling(link) && !dComIfGp_isPauseFlag() && link->getClothesChangeWaitTimer() == 0 &&
+           // Spinner: the ride pose crouches/leans Link far from the standing
+           // pose the head anchor and arm IK assume, and it came out jumbled
+           // (2026-10-15). Show the plain animated body instead, like swimming.
+           !link->checkSpinnerRide() && !link->checkSpinnerReady();
 }
 
 // cameraEye: the head-center camera position this frame
@@ -2540,6 +2624,7 @@ inline void refreshFullBodyIkLive(const cXyz& cameraEye, s16 headYawS) {
     detail::s_bodyAnchorValid = false;
     detail::s_ikFreezeActive = false;
     auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
+    captureRawBodyJointsOnce(link);  // before anything below rewrites the buffer
     if (!isFullBodyIkActive(link)) return;
     J3DModel* model = link->mpLinkModel;
     if (!model) return;
@@ -2560,6 +2645,7 @@ inline void refreshFullBodyIkLive(const cXyz& cameraEye, s16 headYawS) {
         }
         model->calcWeightEnvelopeMtx();
         markModelJointsLive(model);
+        refreshBootsLive(link);
         return;
     }
 
@@ -2577,7 +2663,9 @@ inline void refreshFullBodyIkLive(const cXyz& cameraEye, s16 headYawS) {
     // stopped game time clears the interpolation history) or a tumbling move
     // is frozen out (only with the head anchor, which is what makes it orbit),
     // the last good pose is reused and anchoring/IK still run on it.
-    const bool headAnchor = dusk::getSettings().game.vrFullBodyHeadAnchor.getValue();
+    // Head anchor ("Body Follows Headset") is always on with Full Body since
+    // 2026-10-15 (user request; the setting was removed).
+    constexpr bool headAnchor = true;
     const bool freezePose = headAnchor && detail::s_ikPoseValid && isFullBodyTumbleProc(link);
     if (!freezePose) {
         bool fresh = true;
@@ -2611,20 +2699,40 @@ inline void refreshFullBodyIkLive(const cXyz& cameraEye, s16 headYawS) {
     const int lShoulder = lElbow >= 0 ? detail::ikParentWithLength(model, lElbow) : -1;
     const int rElbow = detail::ikParentWithLength(model, kRightHand);
     const int rShoulder = rElbow >= 0 ? detail::ikParentWithLength(model, rElbow) : -1;
-    if (lShoulder < 0 || rShoulder < 0) return;
+    if (lShoulder < 0 || rShoulder < 0) {
+        refreshBootsLive(link);
+        return;
+    }
 
     // Head anchor: move/turn the whole body so its eye point (the same
     // head-joint offset setBodyPartPos() uses) sits at the camera and its
-    // torso faces the head yaw. This also removes the walking jitter: the
+    // body faces the head yaw. This also removes the walking jitter: the
     // camera anchor is extrapolated a tick ahead while the body is drawn
     // interpolated, so unanchored the gap between them changed every tick.
-    // Torso facing comes from the shoulder line (sign fixed with
-    // shape_angle), so it matches the interpolated pose being drawn.
+    // Body facing comes from the hip line (the two legs' topmost joints below
+    // their common parent), sign fixed with shape_angle, so it matches the
+    // interpolated pose being drawn. It used the shoulder line until
+    // 2026-10-15; the ball-and-chain twirl twists the upper body, and turning
+    // that to the head yaw spun the whole body. Falls back to the shoulders
+    // if the hip joints are too close together to give a direction.
     s16 bodyYaw = link->shape_angle.y;
     {
-        const cXyz lS = detail::ikPos(model->getAnmMtx(lShoulder));
-        const cXyz rS = detail::ikPos(model->getAnmMtx(rShoulder));
-        cXyz fwd(lS.z - rS.z, 0.f, -(lS.x - rS.x));  // up x (left shoulder - right shoulder)
+        constexpr int kLegA = 0x13;  // leg chains, as setItemMatrix() reads them for the iron boots
+        constexpr int kLegB = 0x18;
+        int lineA = lShoulder;
+        int lineB = rShoulder;
+        if (jointNum > kLegB) {
+            const int hipA = detail::ikTopOfSide(kLegA, kLegB);
+            const int hipB = detail::ikTopOfSide(kLegB, kLegA);
+            if (hipA >= 0 && hipB >= 0 &&
+                (detail::ikPos(model->getAnmMtx(hipA)) - detail::ikPos(model->getAnmMtx(hipB))).abs() > 3.f) {
+                lineA = hipA;
+                lineB = hipB;
+            }
+        }
+        const cXyz lS = detail::ikPos(model->getAnmMtx(lineA));
+        const cXyz rS = detail::ikPos(model->getAnmMtx(lineB));
+        cXyz fwd(lS.z - rS.z, 0.f, -(lS.x - rS.x));  // up x (A - B); sign fixed below
         if (fwd.x * cM_ssin(bodyYaw) + fwd.z * cM_scos(bodyYaw) < 0.f) {
             fwd.x = -fwd.x;
             fwd.z = -fwd.z;
@@ -2674,6 +2782,7 @@ inline void refreshFullBodyIkLive(const cXyz& cameraEye, s16 headYawS) {
 
     model->calcWeightEnvelopeMtx();
     markModelJointsLive(model);
+    refreshBootsLive(link);
 }
 
 // ---------------------------------------------------------------------------
@@ -3064,10 +3173,16 @@ inline HeldItemAttach computeKanteraAttach(daAlink_c* link) {
     return HeldItemAttach::None;
 }
 
+// The hand joint as of this sim tick (captureRawBodyJointsOnce()), the same
+// space setItemMatrix() placed the item in. Not the live body buffer: Full
+// Body IK moves that hand joint onto the tracked hand, which made the
+// computed item offset collapse and left the item where the game put it.
 inline void detail_pickHeldItemHandRefs(daAlink_c* link, J3DModel* bodyModel, bool isLeft,
                                          MtxP& outHandJointMtx, MtxP& outTrackedHandMtx) {
-    outHandJointMtx = bodyModel->getAnmMtx(isLeft ? link->getLeftHandJntNo() : link->getRightHandJntNo());
+    captureRawBodyJointsOnce(link);
+    outHandJointMtx = isLeft ? detail::s_rawLeftHandJointMtx : detail::s_rawRightHandJointMtx;
     outTrackedHandMtx = isLeft ? detail::s_leftHandMtx : detail::s_rightHandMtx;
+    (void)bodyModel;
 }
 
 // Called once per real frame from vr_main.cpp's tick(), alongside (and
@@ -3077,7 +3192,13 @@ inline void detail_pickHeldItemHandRefs(daAlink_c* link, J3DModel* bodyModel, bo
 // refreshTrackedItemMtxLive()/refreshTrackedHandDrawMtxLive() above --
 // never checked isFirstPerson(), so held items (bow, bottles, lantern,
 // copy rod, etc.) kept tracking the real controllers in third person too.
+namespace detail {
+inline bool s_heldItemTrackedThisFrame = false;
+}  // namespace detail
+
 inline void refreshTrackedHeldItemMtxLive() {
+    detail::s_heldItemTrackedThisFrame = false;
+    dusk::interp::particle::clear_live_positions();  // re-marked below while the lantern is held
     auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
     if (!link) return;
     if (!isFirstPerson(link)) return;
@@ -3105,6 +3226,7 @@ inline void refreshTrackedHeldItemMtxLive() {
         } else if (applyTrackedItemMtxIfAttached(heldItemModel, attached, detail::s_heldItemRawBasis.mtx,
                                                   handJointMtx, trackedHandMtx)) {
             markModelJointsLive(heldItemModel);
+            detail::s_heldItemTrackedThisFrame = true;
         }
         // attach == None (head-item / hookshot / iron ball): leave
         // completely untouched, including frame_interp's normal
@@ -3117,7 +3239,8 @@ inline void refreshTrackedHeldItemMtxLive() {
         captureRawBasisOnce(kanteraModel, detail::s_kanteraRawBasis);
 
         const HeldItemAttach attach = computeKanteraAttach(link);
-        MtxP handJointMtx = bodyModel->getAnmMtx(link->getLeftHandJntNo());
+        captureRawBodyJointsOnce(link);
+        MtxP handJointMtx = detail::s_rawLeftHandJointMtx;  // see detail_pickHeldItemHandRefs()
         const bool attached = (attach == HeldItemAttach::Left) && detail::s_kanteraRawBasis.valid &&
                               !isHandTrackingSuspended(link);
 
@@ -3178,6 +3301,11 @@ inline void refreshTrackedHeldItemMtxLive() {
             JPABaseEmitter* flameEmitter = dComIfGp_particle_getEmitter(link->getKandelaarParticleId());
             if (flameEmitter) {
                 flameEmitter->setGlobalTranslation(flamePos.x, flamePos.y, flamePos.z);
+                // Since the 2.0 particle-interpolation rewrite, drawing replaces
+                // each particle's position with its per-tick history and ignores
+                // mark_live_this_frame(); mark_live_position() makes it use the
+                // positions written below.
+                dusk::interp::particle::mark_live_position(flameEmitter);
 
                 // CONFIRMED FIXED IN-HEADSET (2026-08-13). Full investigation
                 // trail (why setGlobalTranslation() alone wasn't enough, the
@@ -3216,6 +3344,7 @@ inline void refreshTrackedHeldItemMtxLive() {
                     p->mPosition.set(flamePos.x + localX, flamePos.y + localY, flamePos.z + localZ);
                     p->setStatus(0x20);
                     dusk::interp::mark_live_this_frame(p);
+                    dusk::interp::particle::mark_live_position(p);
                 }
                 for (JPANode<JPABaseParticle>* node = flameEmitter->mAlivePtclChld.getFirst();
                      node != flameEmitter->mAlivePtclChld.getEnd(); node = node->getNext()) {
@@ -3227,10 +3356,32 @@ inline void refreshTrackedHeldItemMtxLive() {
                     p->mPosition.set(flamePos.x + localX, flamePos.y + localY, flamePos.z + localZ);
                     p->setStatus(0x20);
                     dusk::interp::mark_live_this_frame(p);
+                    dusk::interp::particle::mark_live_position(p);
                 }
             }
         }
     }
+}
+
+// Dominion Rod orb (daCrod_c): its own execute() places it at the rod tip
+// once per sim tick from mHeldItemModel's root joint -- the game's placement,
+// before refreshTrackedHeldItemMtxLive() moved the rod to the tracked hand. So
+// with the rod tracked, the orb floated where the resting rod would be. Re-place
+// it every frame from the tracked rod. Run after refreshTrackedHeldItemMtxLive().
+inline void refreshCopyRodBallLive() {
+    auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
+    if (!link || !detail::s_heldItemTrackedThisFrame) return;
+    // While held, the orb actor lives in the generic held-item slot
+    // (mItemAcKeep); mCopyRodAcKeep is only filled once it's thrown.
+    fopAc_ac_c* actor = link->mItemAcKeep.getActor();
+    if (!actor || !fopAc_IsActor(actor) || fopAcM_GetName(actor) != fpcNm_CROD_e) {
+        actor = link->getCopyRodActor();
+    }
+    if (!actor || !fopAc_IsActor(actor) || fopAcM_GetName(actor) != fpcNm_CROD_e) return;
+    auto* rod = static_cast<daCrod_c*>(actor);
+    if (!rod->mpBallModel || !rod->applyRodAttachedTransform()) return;
+    rod->mpBallModel->calc();
+    markModelJointsLive(rod->mpBallModel);
 }
 
 // See dusk::vr::getTrackedHandWorldPos() (vr_main.hpp) for the
@@ -4279,6 +4430,7 @@ inline cXyz computeRawCoreAnchoredEye(daAlink_c* link) {
 // the same problem without separate confirmation.
 inline constexpr float kHorseCameraBackUnits = 30.48f;  // 1 real foot (100 units/metre, see kCoreAnchorExtraForwardUnits's own comment)
 inline constexpr float kHorseCameraUpUnits = 15.24f;    // 6 real inches, same conversion
+inline constexpr float kSpinnerCameraDownUnits = 30.48f;  // 1 real foot
 
 inline cXyz computeRawEyeAnchor(daAlink_c* link) {
     if (link->checkReinRide()) {
@@ -4312,7 +4464,13 @@ inline cXyz computeRawEyeAnchor(daAlink_c* link) {
     }
     if (!link->checkEventRun()) {
         // Ordinary gameplay -- root/core-anchored, section 23.
-        return computeRawCoreAnchoredEye(link);
+        cXyz eye = computeRawCoreAnchoredEye(link);
+        if (link->checkSpinnerRide() || link->checkSpinnerReady()) {
+            // Link crouches on the Spinner; the standing-height calibration
+            // put the view too high (user request 2026-10-15: ~1 foot down).
+            eye.y -= kSpinnerCameraDownUnits;
+        }
+        return eye;
     }
     // Plain dialogue: Link is just standing there, so use the physics
     // anchor too rather than following his talk animations. Like the rest

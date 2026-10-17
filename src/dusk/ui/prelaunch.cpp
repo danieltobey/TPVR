@@ -1111,10 +1111,9 @@ void Prelaunch::update() {
         }
     }
     if (mVersion != nullptr) {
-        std::string_view versionStr(BOREALIS_APP_DESCRIBE);
-        if (versionStr[0] == 'v') {
-            versionStr = versionStr.substr(1);
-        }
+        // Fixed label for the VR fork, instead of the git describe string
+        // (BOREALIS_APP_DESCRIBE, e.g. "2.2.0-21-dirty").
+        constexpr std::string_view versionStr = "2.4.0-dev";
         set_text_content(mVersion, Rml::String{versionStr});
     }
     if (mUpdateStatus != nullptr && mUpdateMessage != nullptr) {

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace dusk::interp::particle {
 namespace {
@@ -52,6 +53,8 @@ struct History {
 
 std::unordered_map<const JPABaseParticle*, History<ParticleState>> s_particles;
 std::unordered_map<const JPABaseEmitter*, History<EmitterState>> s_emitters;
+std::unordered_set<const JPABaseParticle*> s_liveParticles;
+std::unordered_set<const JPABaseEmitter*> s_liveEmitters;
 
 // Infuriatingly, some particles are recreated every frame rather than having a real
 // lifespan, so it's necessary to track their relationship to be able to do interpolation
@@ -227,6 +230,19 @@ void capture(JPABaseEmitter* e) {
     }
 }
 
+void clear_live_positions() {
+    s_liveParticles.clear();
+    s_liveEmitters.clear();
+}
+
+void mark_live_position(const JPABaseParticle* p) {
+    s_liveParticles.insert(p);
+}
+
+void mark_live_position(const JPABaseEmitter* e) {
+    s_liveEmitters.insert(e);
+}
+
 JPABaseParticle* present(JPABaseParticle* p, JPABaseParticle& scratch, float& age) {
     age = p->mAge;
     if (!game_clock::is_presentation_frame()) {
@@ -243,6 +259,10 @@ JPABaseParticle* present(JPABaseParticle* p, JPABaseParticle& scratch, float& ag
     scratch.mPosition = lerp(a.position, b.position, t);
     scratch.mLocalPosition = lerp(a.localPosition, b.localPosition, t);
     scratch.mOffsetPosition = lerp(a.offsetPosition, b.offsetPosition, t);
+    if (s_liveParticles.contains(p)) {
+        scratch.mPosition = p->mPosition;
+        scratch.mOffsetPosition = p->mOffsetPosition;
+    }
     scratch.mVelocity = lerp(a.velocity, b.velocity, t);
     scratch.mBaseAxis = lerp(a.baseAxis, b.baseAxis, t);
     if (scratch.mBaseAxis.isZero()) {
@@ -265,7 +285,7 @@ JPABaseParticle* present(JPABaseParticle* p, JPABaseParticle& scratch, float& ag
 JGeometry::TVec3<f32> position(const JPABaseParticle* p) {
     const auto* h = history(s_particles, p);
     const float t = get_interpolation_step();
-    if (h != nullptr && t < 1.0f) {
+    if (h != nullptr && t < 1.0f && !s_liveParticles.contains(p)) {
         return lerp(h->previous.position, h->current.position, t);
     }
     return p->mPosition;
@@ -274,7 +294,7 @@ JGeometry::TVec3<f32> position(const JPABaseParticle* p) {
 JGeometry::TVec3<f32> emitter_position(const JPABaseEmitter* e, const JGeometry::TVec3<f32>& current) {
     const auto* h = history(s_emitters, e);
     const float t = get_interpolation_step();
-    if (h != nullptr && t < 1.0f) {
+    if (h != nullptr && t < 1.0f && !s_liveEmitters.contains(e)) {
         return lerp(h->previous.position, h->current.position, t);
     }
     return current;

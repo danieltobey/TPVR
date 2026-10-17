@@ -21,7 +21,7 @@ Spec-driven development for the TPVR comfort, lighting, audio and presentation w
 | Spec | Status |
 |---|---|
 | [01 First-person camera](01-first-person-camera.md) | ✅ Verified (perspective switch 🟡) |
-| [02 Movement & turning](02-movement-and-turning.md) | ✅ Verified (horse deadzone/smoothing 🟡) |
+| [02 Movement & turning](02-movement-and-turning.md) | ✅ Verified (Turn With Epona re-check, horse deadzone 🟡) |
 | [03 Lighting](03-lighting.md) | ✅ Verified (Follow Look / Original modes 🟡) |
 | [04 Sky](04-sky.md) | ✅ Verified |
 | [05 Audio](05-audio.md) | ✅ Verified |

@@ -29,6 +29,7 @@
 #include "m_Do/m_Do_controller_pad.h"            // mDoCPd_c::getSubStickX -- real physical gamepad C-stick
 #include "m_Do/m_Do_graphic.h"                  // mDoGph_gInf_c::captureHudBillboard
 #include "d/d_meter2_info.h"                    // dMeter2Info_getWindowStatus -- HUD on Left Arm gating
+#include "d/actor/d_a_horse.h"                  // daHorse_c -- Turn With Epona
 #include "f_pc/f_pc_manager.h"                  // fpcM_DrawIterater, fpcM_Draw
 #include "dusk/game_clock.h"                    // dusk::game_clock::FrameTiming
 #include "dusk/interp/material.h" // replay_models_for_current_view()
@@ -2512,71 +2513,6 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     dusk::vr::g_smoothTurnYawRad -= dusk::vr::devtools::takeScriptedTurnRad();
 #endif
 
-    // --- Horse riding: turn the view with Epona (2026-09-29,
-    // game.vrHorseTurnView, default on) ---
-    // While riding, the left stick steers the horse, so without this the view
-    // stays put while the horse turns underneath. Each frame, rotate the view
-    // by however far the horse's facing moved -- the player's look direction
-    // RELATIVE TO THE HORSE is preserved (looking right stays looking right
-    // through a left turn), and never snaps to horse-forward. The horse's
-    // yaw only changes once per sim tick, so it's interpolated between the
-    // last two ticks (same step as the rest of the presentation) to avoid a
-    // 30Hz stair-step at display rate.
-    //
-    // SMOOTHED 2026-09-29 (user report: "turning is a bit jarring... no
-    // speed ramping on horse turns"): the horse's yaw starts and stops
-    // turning at full rate with the stick, so the view eases toward it
-    // (exponential, kHorseTurnViewSmoothSec) rather than copying it --
-    // rotation speed ramps in and out, and still ends up exactly as far
-    // round as the horse turned.
-    {
-        constexpr float kHorseTurnViewSmoothSec = 0.4f;  // 0.2 still felt abrupt (user, 2026-09-29)
-        static bool s_horseFollowActive = false;
-        static s16 s_horseYawPrevS = 0, s_horseYawCurrS = 0;
-        static float s_horseYawAppliedRad = 0.f;
-        static uint64_t s_horseYawTick = 0;
-
-        daHorse_c* horse = nullptr;
-        if (dusk::getSettings().game.vrHorseTurnView.getValue()) {
-            auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
-            if (link != nullptr && link->checkHorseRide() && !link->checkEventRun()) {
-                horse = dComIfGp_getHorseActor();
-            }
-        }
-
-        if (horse == nullptr) {
-            s_horseFollowActive = false;
-        } else {
-            const s16 yawS = horse->shape_angle.y;
-            const uint64_t tick = dusk::interp::sim_tick_seq();
-            if (!s_horseFollowActive) {
-                s_horseYawPrevS = s_horseYawCurrS = yawS;
-                s_horseYawAppliedRad = cM_s2rad(yawS);
-                s_horseYawTick = tick;
-                s_horseFollowActive = true;
-            } else {
-                if (tick != s_horseYawTick) {
-                    s_horseYawPrevS = s_horseYawCurrS;
-                    s_horseYawCurrS = yawS;
-                    s_horseYawTick = tick;
-                }
-                const float step = dusk::interp::get_interpolation_step();
-                const s16 presentedS = static_cast<s16>(
-                    s_horseYawPrevS +
-                    static_cast<s16>(static_cast<s16>(s_horseYawCurrS - s_horseYawPrevS) * step));
-                const float gapRad = std::remainder(cM_s2rad(presentedS) - s_horseYawAppliedRad,
-                                                    2.f * 3.14159265f);
-                const float blend =
-                    1.f - std::exp(-static_cast<float>(pacing.dt) / kHorseTurnViewSmoothSec);
-                const float deltaRad = gapRad * blend;
-                s_horseYawAppliedRad += deltaRad;
-                if (deltaRad != 0.f) {
-                    dusk::vr::snapScriptedCameraYaw(deltaRad);
-                }
-            }
-        }
-    }
-
     // Scripted-camera facing assist (2026-08-19 request, Third Person VR
     // setting only). Two independent mechanisms, split same day per an
     // explicit follow-up request to treat Z-targeting differently from
@@ -2647,6 +2583,60 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
             s_followLastCamYawS = camYawS;
         }
         s_followWasActive = haveYaw;
+    }
+
+    // --- Turn with Epona ---
+    //
+    // "game.vrTurnWithEpona" (default on). While riding, Epona's yaw change
+    // is added to the smooth-turn yaw, so the view turns with her. Her
+    // shape_angle only changes once per sim tick, so a smoothed yaw eases
+    // toward it and only the smoothed step is applied (same approach as the
+    // first-person Z-target focus). A single-tick change past the jump-cut
+    // threshold (warp, reset) re-bases instead of spinning. Skipped during
+    // events and when Third Person's "Turn With Game Camera" is already
+    // turning the view (the game camera follows Epona, so both would add
+    // the same turn).
+    {
+        static bool s_eponaWasActive = false;
+        static s16 s_eponaLastYawS = 0;
+        static float s_eponaSmoothedYawRad = 0.f;
+
+        const daHorse_c* horse = nullptr;
+        if (dusk::getSettings().game.vrTurnWithEpona.getValue()) {
+            if (auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer())) {
+                const bool cameraFollowTurns =
+                    dusk::getSettings().game.vrThirdPersonFollowCameraYaw.getValue() &&
+                    !dusk::vr::isVrFirstPerson(link);
+                if (link->checkReinRide() && !link->checkEventRun() && !cameraFollowTurns) {
+                    horse = dComIfGp_getHorseActor();
+                }
+            }
+        }
+
+        if (horse != nullptr) {
+            constexpr float kPi = 3.14159265358979323846f;
+            const s16 yawS = horse->shape_angle.y;
+            const s16 tickDeltaS = static_cast<s16>(yawS - s_eponaLastYawS);
+            if (!s_eponaWasActive ||
+                std::abs(cM_s2rad(tickDeltaS)) >=
+                    cM_s2rad(cM_deg2s(dusk::vr::kScriptedCameraJumpCutThresholdDeg)))
+            {
+                s_eponaSmoothedYawRad = cM_s2rad(yawS);
+            } else {
+                // 0.4 s (fork, 2026-10-17): upstream's 0.1 s felt abrupt, as
+                // 0.2 s did on our earlier horse follow (Daniel, 2026-09-29).
+                constexpr float kEponaTurnSmoothingSec = 0.4f;
+                float gap = cM_s2rad(yawS) - s_eponaSmoothedYawRad;
+                while (gap > kPi) gap -= 2.f * kPi;
+                while (gap < -kPi) gap += 2.f * kPi;
+                const float alpha = 1.f - std::exp(-pacing.dt / kEponaTurnSmoothingSec);
+                const float step = gap * alpha;
+                s_eponaSmoothedYawRad += step;
+                dusk::vr::snapScriptedCameraYaw(step);
+            }
+            s_eponaLastYawS = yawS;
+        }
+        s_eponaWasActive = horse != nullptr;
     }
 
     // --- Cutscenes: jump-cut detection only ---
@@ -3140,6 +3130,8 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     // bottles, lantern, etc.). See refreshTrackedHeldItemMtxLive()'s own
     // comment (vr_link_visibility.hpp).
     dusk::vr::refreshTrackedHeldItemMtxLive();
+    // Dominion Rod orb follows the tracked rod (vr_link_visibility.hpp).
+    vr_link::refreshCopyRodBallLive();
 
     // Extends tracking to getLeftItemMatrix()/getRightItemMatrix()
     // themselves (fixes fishing rod/boomerang/nocked arrows/etc. -- see
