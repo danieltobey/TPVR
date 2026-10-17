@@ -21,7 +21,8 @@
 //   metrics start | metrics stop    mark a measurement window (scenario.sh records it)
 //   wait settled                    pause until the loaded actor count holds for 3 s
 //   actors | expect actors <n>      print the loaded actor count / check a minimum
-//   save copy 1 3 | save load 3     copy slot 1 to the test slot / load the test slot
+//   crowd <n>                       spawn n Castle Town townsfolk around Link (spec 13 crowd scene)
+//   save copy 1 3 | save load 3 [human|wolf]   copy slot 1 to the test slot / load it (in that form)
 //   perf log on|off                 1-per-second perf summary line (spec 13)
 //   perf mark <name>                start a benchmark segment (closes the perf windows)
 //   crash                           crash the game on purpose (tests tools/crash.sh)

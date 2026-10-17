@@ -14,7 +14,11 @@
 #include "dusk/ui/ui.hpp"
 #include "dusk/vr/vr_debug_log.hpp"
 #include "dusk/vr/vr_devtools.hpp"
+#include "SSystem/SComponent/c_math.h"
+#include "f_op/f_op_actor_mng.h"
 #include "f_op/f_op_actor_tag.h"
+#include "f_pc/f_pc_layer.h"
+#include "f_pc/f_pc_manager.h"
 #include "m_Do/m_Do_MemCard.h"
 #include "m_Do/m_Do_MemCardRWmng.h"
 
@@ -209,21 +213,32 @@ bool waitCardIdle() {
 }
 
 // Reads the card file's three quest logs into buf (SAVEFILE_SIZE bytes).
-bool readCard(u8* buf) {
+// `why` collects what happened on each attempt, for the error message.
+bool readCard(u8* buf, std::string& why) {
+    // At startup the launch menu (dusk/ui/prelaunch.cpp) sits over the title
+    // and starts the memory card thread only when it closes; benchmarks run
+    // from that menu, so start it the same way if it isn't running yet.
+    if (!g_mDoMemCd_control.mInitialized) {
+        mDoMemCd_ThdInit();
+        why += " started the card thread;";
+    }
     // Load() only takes the request if it gets the card mutex; a taken
     // request makes LoadSync() report "pending" (0) until the read is done.
     // An immediate failure (2) may be a request that wasn't taken (stale
     // state from an earlier operation): try again.
     for (int attempt = 0; attempt < 5; ++attempt) {
         if (!waitCardIdle()) {
+            why += " card busy;";
             return false;
         }
         mDoMemCd_Load();
         u32 status = mDoMemCd_LoadSync(buf, SAVEFILE_SIZE, 0);
+        why += " try" + std::to_string(attempt + 1) + " first=" + std::to_string(status);
         if (status == 1) {
             return true;
         }
         if (status == 2) {
+            why += " card state " + std::to_string(mDoMemCd_getStatus(0)) + ";";
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
             continue;
         }
@@ -231,10 +246,13 @@ bool readCard(u8* buf) {
         while (SaveClock::now() < deadline) {
             status = mDoMemCd_LoadSync(buf, SAVEFILE_SIZE, 0);
             if (status != 0) {
+                why += " then=" + std::to_string(status) + " card state " +
+                       std::to_string(mDoMemCd_getStatus(0)) + ";";
                 return status == 1;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
+        why += " timed out;";
         return false;
     }
     return false;
@@ -244,8 +262,9 @@ bool readCard(u8* buf) {
 // copy the quest log, set its checksum, write the card file.
 void saveCopy(Request& req) {
     static u8 buf[SAVEFILE_SIZE];
-    if (!readCard(buf)) {
-        emit(req, "save copy: couldn't read the memory card");
+    std::string why;
+    if (!readCard(buf, why)) {
+        emit(req, "save copy: couldn't read the memory card:" + why);
         return;
     }
     if (!mDoMemCdRWm_TestCheckSumGameData(buf)) {
@@ -278,10 +297,18 @@ void saveCopy(Request& req) {
 // `save load 3`: what choosing slot 3 on the file select (or the command
 // line's save option, d_s_logo.cpp) does, minus the scene change: the script
 // warps next.
-void saveLoad(Request& req) {
+// `form`: "human"/"wolf" sets the loaded save's form before the warp, so Link
+// arrives in it (Midna won't transform where people can see); empty keeps it.
+// Until free transformation is unlocked (event bit 0x0D04), the game forces
+// the wolf while any province is under twilight (dComIfGs_Wolf_Change_Check),
+// so "human" also sets that bit, in memory only (nothing is saved). Twilit
+// areas still can't hold human Link; benchmark those as saved (spec 13,
+// Decision 6).
+void saveLoad(Request& req, const std::string& form) {
     static u8 buf[SAVEFILE_SIZE];
-    if (!readCard(buf)) {
-        emit(req, "save load: couldn't read the memory card");
+    std::string why;
+    if (!readCard(buf, why)) {
+        emit(req, "save load: couldn't read the memory card:" + why);
         return;
     }
     if (!mDoMemCdRWm_TestCheckSumGameData(buf + kTestSlot * SAVEDATA_SIZE)) {
@@ -305,17 +332,61 @@ void saveLoad(Request& req) {
     dKy_clear_game_init();
     dComIfGs_resetDan();
     dComIfGs_setRestartRoomParam(0);
-    emit(req, "save load: slot 3 loaded");
+    if (form == "human" || form == "wolf") {
+        dComIfGs_setTransformStatus(form == "human" ? TF_STATUS_HUMAN : TF_STATUS_WOLF);
+        if (form == "human") {
+            dComIfGs_onEventBit(0x0D04);  // free transformation unlocked
+        }
+    }
+    emit(req, "save load: slot 3 loaded" + (form.empty() ? std::string() : " as " + form));
 }
 
 void runSave(Request& req, const std::vector<std::string>& args) {
     if (args.size() == 4 && args[1] == "copy" && args[2] == "1" && args[3] == "3") {
         saveCopy(req);
-    } else if (args.size() == 3 && args[1] == "load" && args[2] == "3") {
-        saveLoad(req);
+    } else if ((args.size() == 3 || args.size() == 4) && args[1] == "load" && args[2] == "3" &&
+               (args.size() == 3 || args[3] == "human" || args[3] == "wolf")) {
+        saveLoad(req, args.size() == 4 ? args[3] : std::string());
     } else {
-        emit(req, "Usage: save copy 1 3 | save load 3 (slot 3 is the only test slot)");
+        emit(req, "Usage: save copy 1 3 | save load 3 [human|wolf] (slot 3 is the only test slot)");
     }
+}
+
+// --- Synthetic crowd (spec 13, item 1d) --------------------------------------
+// `crowd <n>`: n of Castle Town's townsfolk (NPC_CD3) in rings around Link,
+// the same every run: rings 120 units apart starting at 250, people ~120
+// units apart along each ring, looks cycling through all 30 (the actor's
+// "argument"), each facing Link, standing still (no path) and out all day.
+void spawnCrowd(Request& req, int count) {
+    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    if (player == nullptr) {
+        emit(req, "crowd: no player");
+        return;
+    }
+    constexpr int kLooks = 30;              // MAN_a .. WAN_b2 in d_stage.cpp's name table
+    constexpr u32 kStandAllDay = 0xFFFFFF00;  // path none, start/end time none, group 0
+    constexpr float kFirstRing = 250.f, kRingGap = 120.f, kSpacing = 120.f;
+    const cXyz centre = player->current.pos;
+    const int room = fopAcM_GetRoomNo(player);
+    layer_class* savedLayer = fpcLy_CurrentLayer();
+    if (base_process_class* playScene = fpcM_SearchByName(fpcNm_PLAY_SCENE_e)) {
+        fpcLy_SetCurrentLayer(&((process_node_class*)playScene)->layer);
+    }
+    int spawned = 0, failed = 0, placed = 0;
+    for (float radius = kFirstRing; placed < count; radius += kRingGap) {
+        const int onRing = std::max(1, static_cast<int>(2.f * 3.14159265f * radius / kSpacing));
+        for (int k = 0; k < onRing && placed < count; ++k, ++placed) {
+            const float a = 2.f * 3.14159265f * k / onRing;
+            cXyz pos(centre.x + radius * std::sin(a), centre.y + 50.f, centre.z + radius * std::cos(a));
+            csXyz angle(0, cM_atan2s(centre.x - pos.x, centre.z - pos.z), 0);
+            cXyz scale(1.f, 1.f, 1.f);
+            const fpc_ProcID id = fopAcM_create(fpcNm_NPC_CD3_e, kStandAllDay, &pos, room, &angle, &scale,
+                                                static_cast<s8>(placed % kLooks));
+            (id != fpcM_ERROR_PROCESS_ID_e && id != 0 ? spawned : failed)++;
+        }
+    }
+    fpcLy_SetCurrentLayer(savedLayer);
+    emit(req, "crowd: spawned " + std::to_string(spawned) + (failed ? ", failed " + std::to_string(failed) : ""));
 }
 
 // --- Perf commands (spec 13, items 1b and 5) ---------------------------------
@@ -489,6 +560,15 @@ bool step(Request& req) {
         }
         if (cmd == "perf") {
             runPerf(req, args);
+            continue;
+        }
+        if (cmd == "crowd" && args.size() == 2) {
+            const auto n = parseFloat(args[1]);
+            if (!n || *n < 0 || *n > 300) {
+                emit(req, "Usage: crowd <0-300>");
+            } else {
+                spawnCrowd(req, static_cast<int>(*n));
+            }
             continue;
         }
         if (cmd == "actors" && args.size() == 1) {
