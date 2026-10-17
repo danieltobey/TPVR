@@ -55,6 +55,11 @@ float takeScriptedTurnRad();
 // `head lock`: render from a fixed head pose instead of the tracked one.
 bool isHeadLocked();
 
+// `invulnerable on|off` (spec 13 item 1a): Link's hurtboxes stay off, as
+// during the game's own invincibility after a hit (d_a_alink.cpp), so
+// enemies still chase and attack but nothing lands.
+bool isInvulnerable();
+
 // True once any remote command has run this session. Auto-save is off from
 // then on (dusk/autosave.cpp), so scripted runs never write Daniel's saves;
 // slot 1 is his playthrough and must never be overwritten.

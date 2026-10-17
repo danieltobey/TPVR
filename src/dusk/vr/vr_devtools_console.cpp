@@ -74,6 +74,7 @@ struct ScriptedInput {
     std::array<int, kButtons.size()> buttonTicks{};
     float pendingTurnRad = 0.f;
     bool headLocked = false;
+    bool invulnerable = false;
 };
 
 ScriptedInput& input() {
@@ -627,6 +628,11 @@ bool step(Request& req) {
             input().headLocked = args[1] == "lock";
             continue;
         }
+        if (cmd == "invulnerable" && args.size() == 2 && (args[1] == "on" || args[1] == "off")) {
+            input().invulnerable = args[1] == "on";
+            emit(req, "invulnerable " + args[1]);
+            continue;
+        }
         runCommand(line, s_state, [&req](std::string text) { emit(req, text); });
     }
     return true;
@@ -703,6 +709,10 @@ float takeScriptedTurnRad() {
 
 bool isHeadLocked() {
     return input().headLocked;
+}
+
+bool isInvulnerable() {
+    return input().invulnerable;
 }
 
 bool perfLogOn() {

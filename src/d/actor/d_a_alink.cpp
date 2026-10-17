@@ -6,6 +6,7 @@
 #include "d/dolzel.h" // IWYU pragma: keep
 
 #include "d/actor/d_a_alink.h"
+#include "dusk/vr/vr_devtools_console.hpp"  // DUSK_VR_DEVTOOLS: `invulnerable` (spec 13)
 #include "JSystem/J2DGraph/J2DAnmLoader.h"
 #include "JSystem/J3DGraphBase/J3DMaterial.h"
 #include "JSystem/J3DGraphLoader/J3DAnmLoader.h"
@@ -7060,7 +7061,13 @@ void daAlink_c::setCollision() {
         setCollisionPos();
     }
 
-    if (mDamageTimer != 0 || checkModeFlg(8)) {
+    // Devtools `invulnerable on` (spec 13 item 1a): hurtboxes off, as during
+    // the invincibility after a hit.
+    if (mDamageTimer != 0 || checkModeFlg(8)
+#if DUSK_VR_DEVTOOLS
+        || dusk::vr::devtools::isInvulnerable()
+#endif
+    ) {
         for (i = 0; i < 3; i++) {
             mTgCyls[i].OffTgSetBit();
             mTgCyls[i].ResetTgHit();
