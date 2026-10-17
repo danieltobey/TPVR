@@ -2964,8 +2964,11 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
 
             fopAc_ac_c* target = nullptr;
             daAlink_c* fpLink = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
+            // Wolf form has its own first-person view (isVrFirstPerson() is
+            // false for the wolf); the focus applies there too.
             if (dusk::getSettings().game.vrZTargetCameraFocus.getValue() && fpLink != nullptr &&
-                !fpLink->checkEventRun() && dusk::vr::isVrFirstPerson(fpLink))
+                !fpLink->checkEventRun() &&
+                (dusk::vr::isVrFirstPerson(fpLink) || dusk::vr::isWolfFirstPersonView(fpLink)))
             {
                 target = fpLink->getAttentionLockTarget();
             }
