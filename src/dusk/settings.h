@@ -384,10 +384,6 @@ struct UserSettings {
         // hidden) and poses his arms with IK so his hands follow the tracked
         // controllers. Default on.
         ConfigVar<bool> vrFullBody;
-        // With Full Body on: moves/turns the whole body every frame so its
-        // head sits at the camera and its torso faces where you look.
-        // Default on.
-        ConfigVar<bool> vrFullBodyHeadAnchor;
         // Full Body: rolls/backflips/side rolls play the normal animation with
         // the body, hands and held items detached from the headset and
         // controllers for the move. Default off (body holds its pose instead).
@@ -616,6 +612,9 @@ struct UserSettings {
         ConfigVar<int> vrSmoothTurnSpeed;
         ConfigVar<bool> vrSnapTurn;
         ConfigVar<int> vrSnapTurnAngle;
+        // Turn the VR view with Epona while riding (adds her yaw change to
+        // the smooth-turn yaw each frame). Default on.
+        ConfigVar<bool> vrTurnWithEpona;
         // First-person comfort tweaks (2026-09-28), all default ON; off
         // restores the original TPVR behaviour for comparison.
         //  vrStableCamera: camera anchored to Link's physics position only --
@@ -633,9 +632,6 @@ struct UserSettings {
         // cutscene and on every camera cut, and to Link's facing when it ends
         // (vr_main.cpp's cutscene jump-cut block). Default on.
         ConfigVar<bool> vrCutsceneFaceCamera;
-        // While riding Epona, rotate the view by the horse's own turning so
-        // the look direction relative to the horse is kept (vr_main.cpp).
-        ConfigVar<bool> vrHorseTurnView;
         // Within a cutscene shot, turn the view with the cutscene camera's own
         // pans (not just on cuts). Requires vrCutsceneFaceCamera.
         ConfigVar<bool> vrCutsceneFollowTurns;

@@ -20,6 +20,15 @@ JGeometry::TVec3<f32> emitter_position(const JPABaseEmitter*, const JGeometry::T
 JGeometry::TVec3<f32> emitter_direction(const JPABaseEmitter*, const JGeometry::TVec3<f32>&);
 float emitter_age(const JPABaseEmitter*);
 
+// VR: particles/emitters whose position was written directly this frame
+// (e.g. the lantern flame following a tracked hand). present()/position()/
+// emitter_position() use their real current position instead of the per-tick
+// history; everything else (age, color, scale) still interpolates. Cleared by
+// clear_live_positions(), which the caller runs once per frame before marking.
+void clear_live_positions();
+void mark_live_position(const JPABaseParticle*);
+void mark_live_position(const JPABaseEmitter*);
+
 struct EmitterVisualState {
     JGeometry::TVec2<f32> scale;
     GXColor prm, env, globalPrm, globalEnv;

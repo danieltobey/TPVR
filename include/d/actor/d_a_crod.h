@@ -31,6 +31,12 @@ public:
     void setLightPower();
     int execute();
     int draw();
+#if TARGET_PC
+    // VR: re-places the orb on the rod tip from the rod's current matrix, for
+    // when the rod is moved every frame (tracked hand). Only while the orb sits
+    // on the rod (param 0/1). Returns false otherwise.
+    bool applyRodAttachedTransform();
+#endif
 
     static fopAc_ac_c* makeIronBallDummy(fopAc_ac_c* p_actor) {
         return (fopAc_ac_c*)fopAcM_fastCreate(0x2F4, 6, &p_actor->current.pos,

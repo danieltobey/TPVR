@@ -25,7 +25,7 @@ In first person the camera rode Link's animated body: it leaned forward along hi
 - Stand still: no idle sway. Sprint from standstill and release: no lurch or overshoot. 180° skid turn: no sideways swing. ✅
 - Crawl, swim, talk to an NPC: height eases between stances, no bobbing. ✅
 - View Mode is always exactly one of its three choices; Camera Follows Animations is greyed out in third person and Giant Screen. 🟡
-- With Full Body on (upstream default) and Body Follows Headset on, the steady camera behaves as above: no sway, and the body stays under the view. 🟡
+- With Full Body on (upstream default; the body always follows the headset since upstream dropped Body Follows Headset, 2026-10-14), the steady camera behaves as above: no sway, and the body stays under the view. 🟡
 
 ## Notes
 Upstream replaced Show Link's Body with Full Body (2026-10-14: body without the head, arms reaching to the controllers, on by default); the old setting is no longer read. The old neck-clearance nudge is only applied when Camera Follows Animations is on.

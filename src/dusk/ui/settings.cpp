@@ -1094,13 +1094,6 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                             "his arms reaching to your hands. On by default.",
                 .isDisabled = [immersiveFirstPerson] { return !immersiveFirstPerson(); },
             });
-        config_bool_select(leftPane, rightPane, getSettings().game.vrFullBodyHeadAnchor,
-            {
-                .key = "Body Follows Headset",
-                .helpText = "Keeps Link's neck under your head, so his body moves with the "
-                            "headset and turns to face where you look. On by default.",
-                .isDisabled = [fullBodyOn] { return !fullBodyOn(); },
-            });
         config_bool_select(leftPane, rightPane, getSettings().game.vrFullBodyShowRolls,
             {
                 .key = "Show Roll Animations",
@@ -1142,9 +1135,9 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             "How far each snap turns you when Snap Turn is on. Default: 45 deg.",
             15, 90, 15,
             [] { return !getSettings().game.vrSnapTurn.getValue(); }, {}, " deg");
-        config_bool_select(leftPane, rightPane, getSettings().game.vrHorseTurnView,
+        config_bool_select(leftPane, rightPane, getSettings().game.vrTurnWithEpona,
             {
-                .key = "Turn View With Horse",
+                .key = "Turn With Epona",
                 .helpText = "Turns your view smoothly along with Epona, so you keep looking the "
                             "same way relative to her. On by default."
             });

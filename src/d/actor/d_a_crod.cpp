@@ -359,6 +359,25 @@ static int daCrod_Execute(daCrod_c* i_this) {
     return i_this->execute();
 }
 
+#if TARGET_PC
+bool daCrod_c::applyRodAttachedTransform() {
+    const u32 param = fopAcM_GetParam(this);
+    if (param != 0 && param != 1) {
+        return false;
+    }
+    daAlink_c* player = daAlink_getAlinkActorClass();
+    if (player == NULL || player->getCopyRodMtx() == NULL) {
+        return false;
+    }
+    cXyz pos;
+    mDoMtx_multVec(player->getCopyRodMtx(), &l_localRodPos, &pos);
+    mDoMtx_stack_c::transS(pos);
+    mDoMtx_stack_c::ZXYrotM(shape_angle);
+    mpBallModel->setBaseTRMtx(mDoMtx_stack_c::get());
+    return true;
+}
+#endif
+
 int daCrod_c::draw() {
     if (fopAcM_GetParam(this) == 6 ||
         (!daAlink_getAlinkActorClass()->checkCopyRodTopUse() && field_0x732 == 0))
