@@ -558,6 +558,23 @@ bool step(Request& req) {
             runSave(req, args);
             continue;
         }
+        // `time next <t>` (spec 13 item 1): the time the next stage loads at,
+        // as a scene change's own time does (applied before its actors spawn,
+        // over the stage's fixed hour and the twilight time restore). A plain
+        // `time` set inside a twilit area is undone the next frame, and after
+        // `save load` nothing restores it on leaving.
+        if (cmd == "time" && args.size() == 3 && args[1] == "next") {
+            float t = -1.f;
+            const auto [_, ec] =
+                std::from_chars(args[2].data(), args[2].data() + args[2].size(), t);
+            if (ec != std::errc() || t < 0.f || t > 360.f) {
+                emit(req, "Usage: time next <0-360>");
+            } else {
+                dKy_set_nexttime(t);
+                emit(req, "time next: " + args[2] + " at the next stage load");
+            }
+            continue;
+        }
         if (cmd == "perf") {
             runPerf(req, args);
             continue;

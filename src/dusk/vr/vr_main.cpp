@@ -560,6 +560,19 @@ static XrPosef lockedHead(const XrPosef& head) {
     return head;
 }
 
+// While the head is locked, the controllers are pinned too (spec 10 item 5,
+// 2026-10-17): a fixed resting pose in the same space as the locked head --
+// low at Link's sides, pointing forward and level -- so Full Body's arm IK
+// still runs but the arms don't reach for wherever the real controllers lie.
+static XrPosef lockedHand(const XrPosef& hand, [[maybe_unused]] bool left) {
+#if DUSK_VR_DEVTOOLS
+    if (dusk::vr::devtools::isHeadLocked()) {
+        return XrPosef{{0, 0, 0, 1}, {left ? -0.20f : 0.20f, -0.45f, -0.25f}};
+    }
+#endif
+    return hand;
+}
+
 static void lockEyeViews([[maybe_unused]] std::vector<XrView>& views,
                          [[maybe_unused]] const XrPosef& head) {
 #if DUSK_VR_DEVTOOLS
@@ -604,8 +617,8 @@ void applyTrackedHandMtx(J3DModel* handModel) {
         const XrTime time = g_session->predictedDisplayTime();
         const XrSpace base = g_session->localSpace();
         const XrPosef hmdPose = lockedHead(locateSpace(g_viewSpace, base, time));
-        const XrPosef rightPose = locateSpace(g_rightGripSpace, base, time);
-        const XrPosef leftPose = locateSpace(g_leftGripSpace, base, time);
+        const XrPosef rightPose = lockedHand(locateSpace(g_rightGripSpace, base, time), false);
+        const XrPosef leftPose = lockedHand(locateSpace(g_leftGripSpace, base, time), true);
 
         view_class* view = dComIfGd_getView();
         if (view) {
@@ -2110,10 +2123,10 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
 
     const XrPosef hmdPose = lockedHead(locateSpace(g_viewSpace, base, time));
     perfLap(6);  // HMD (VIEW space) locate alone
-    const XrPosef rightPose = locateSpace(g_rightGripSpace, base, time);
-    const XrPosef leftPose = locateSpace(g_leftGripSpace, base, time);
-    const XrPosef rightAimPose = locateSpace(g_rightAimSpace, base, time);
-    const XrPosef leftAimPose = locateSpace(g_leftAimSpace, base, time);
+    const XrPosef rightPose = lockedHand(locateSpace(g_rightGripSpace, base, time), false);
+    const XrPosef leftPose = lockedHand(locateSpace(g_leftGripSpace, base, time), true);
+    const XrPosef rightAimPose = lockedHand(locateSpace(g_rightAimSpace, base, time), false);
+    const XrPosef leftAimPose = lockedHand(locateSpace(g_leftAimSpace, base, time), true);
     perfLap(0);  // the four controller-space locates
 
     // --- gameplay controller input (buttons/axes -> PADStatus) ---

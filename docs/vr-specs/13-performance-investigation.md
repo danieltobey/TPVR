@@ -29,8 +29,8 @@ From `vr-mod-notes` (2026-09-16 … 09-20) and specs 08/10:
 
 ### Phase A: benchmark harness (tooling, dev builds only)
 1. **Benchmark scenes.** Non-combat only. One scenario per scene in `tools/scenarios/bench/`: Ordon Village (`F_SP103`), South Faron Woods (`F_SP108`), Hyrule Field (`F_SP121`), Castle Town (`F_SP116`, the crowd scene: daytime, its streets full of townsfolk; **deferred**, see Decision 7), Kakariko Village (`F_SP109`), Lake Hylia (`F_SP115`), plus one light reference scene (an interior) to calibrate against. Each follows one fixed recipe:
-   - warp to a fixed spot at a fixed time of day, then wait until the scene is fully populated (item 1a);
-   - **viewpoint sweep:** with the head locked level, hold each of 8 fixed directions (every 45°) for 5 s, because cost depends on where you look. The instant 45° turn costs one missed frame, so each hold is measured from 0.5 s after the turn;
+   - warp to a fixed spot at a fixed time of day, then wait until the scene is fully populated (item 1a). The time is set with `time next <t>` (devtools), the game's own scene-change time: applied as the next stage loads, before its actors spawn, over the stage's fixed hour and the twilight time restore. A plain `time` before the warp doesn't survive leaving a twilit area, which holds the clock at its own time every frame; with `save load` clearing the remembered pre-twilight time, the next scene started at 0:00 whenever the scene before it was twilit (found 2026-10-17);
+   - **viewpoint sweep:** with the head locked level (which also pins the controllers at rest, spec 10, so Full Body's arms are the same every run), hold each of 8 fixed directions (every 45°) for 5 s, because cost depends on where you look. The instant 45° turn costs one missed frame, so each hold is measured from 0.5 s after the turn;
    - then a scripted ~20 s path of walking and turning.
 1a. **The scene must be the real scene, not just the map.** NPCs, animals and objects appear according to story progress, time of day and room loading. So:
    - the benchmark plays from a **copy of Daniel's current save** placed in test slot 3 (slot 1 is only read, never written; back up first, rule 6), so the world is in his playthrough's state. The copy is frozen: it changes only when it's refreshed on purpose (`tools/bench.sh copy-save`), so the benchmark doesn't drift as he plays on. Console commands (devtools only): `save copy 1 3` copies the quest log in the game's own way (the file-select Copy: memory card read, slot copy with checksum, card write) and refuses any other target than slot 3; `save load 3 human` loads slot 3 into the game, as choosing it on the file select does, before the warp, with Link in human form (Decision 6; `wolf` or nothing keeps other options). `bench.sh copy-save` backs up the card file first and checks afterwards that only slot 3's bytes changed;
@@ -65,7 +65,7 @@ From `vr-mod-notes` (2026-09-16 … 09-20) and specs 08/10:
 15. Daniel picks which fixes to do; each becomes its own spec, and its verification is "before/after on the benchmark".
 
 ## Settings
-None for players. Devtools-only console commands: `perf log on|off`, `perf mark <name>`, `perf off|on <part>` (phase B), `save copy 1 3`, `save load 3 [human|wolf]`, `crowd <n>`, `wait settled`, `expect actors <n>`.
+None for players. Devtools-only console commands: `perf log on|off`, `perf mark <name>`, `perf off|on <part>` (phase B), `save copy 1 3`, `save load 3 [human|wolf]`, `time next <0-360>`, `crowd <n>`, `wait settled`, `expect actors <n>`.
 
 ## Verification
 1. With the game started (Daniel puts the headset on to launch it), `tools/bench.sh all` runs unattended under `tools/headset.sh awake` and produces a complete summary for every scene; `normal` afterwards.
